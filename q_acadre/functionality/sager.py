@@ -220,7 +220,9 @@ async def case_search_full(
     Udfører full search og henter automatisk alle resultatsider.
 
     Alle felter fra det observerede Acadre-request kan gives som input.
-
+    
+    OBS: VIRKER IKKE AT SØGE PÅ TILE!!
+            
     Returns:
         Dictionary med alle samlede resultater:
 
