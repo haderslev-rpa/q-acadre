@@ -40,17 +40,17 @@ async def test_case_search() -> None:
     AutomationServer.from_environment()
 
     credential = Credential.get_credential(
-        "DIRXMCM"
+        "DIRXSDA"
     )
 
     if credential is None:
         raise RuntimeError(
-            "Credential 'DIRXMCM' blev ikke fundet i ATS."
+            "Credential 'DIRXSDA' blev ikke fundet i ATS."
         )
 
     if not credential.username or not credential.password:
         raise RuntimeError(
-            "Credential 'DIRXMCM' mangler username eller password."
+            "Credential 'DIRXSDA' mangler username eller password."
         )
 
     session = BrowserSession(
@@ -77,7 +77,7 @@ async def test_case_search() -> None:
 
         result = await case_search(
             page=page,
-            filter_key="aktindsigt",
+            filter_key="personalesag",
             page_size=50,
             start_page_index=0,
         )
