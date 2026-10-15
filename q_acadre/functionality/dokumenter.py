@@ -73,6 +73,7 @@ async def open_document_upload_page(
 
 async def upload_document_to_case(
     page: Page,
+    session,
     case_id: str | int,
     file_path: str | Path,
     title: str,
@@ -91,6 +92,8 @@ async def upload_document_to_case(
 
     Datoværdier skal gives som dd-mm-yyyy. Funktionen beholder en dato,
     hvis feltet allerede indeholder præcis den ønskede værdi.
+
+    Screenshots håndteres af den eksisterende BrowserSession.
 
     Returns:
         Dictionary med case_id, document_id, document_url,
@@ -148,186 +151,243 @@ async def upload_document_to_case(
             f"Filen findes ikke: {resolved_file_path}"
         )
 
-    await open_document_upload_page(
-        page=page,
-        case_id=normalized_case_id,
-        timeout_ms=timeout_ms,
-    )
-
-    await page.locator(
-        DocumentSelectors.TITLE
-    ).fill(
-        normalized_title
-    )
-
-    file_input = page.locator(
-        DocumentSelectors.FILE_INPUT
-    )
-
-    await expect(
-        file_input
-    ).to_be_attached(
-        timeout=timeout_ms
-    )
-
-    await file_input.set_input_files(
-        str(resolved_file_path)
-    )
-
-    await page.locator(
-        DocumentSelectors.DOCUMENT_TYPE
-    ).select_option(
-        value=document_type
-    )
-
-    await page.locator(
-        DocumentSelectors.CATEGORY
-    ).select_option(
-        value=normalized_category
-    )
-
-    await _fill_caseworker(
-        page=page,
-        caseworker=normalized_caseworker,
-        timeout_ms=timeout_ms,
-    )
-
-    await page.locator(
-        DocumentSelectors.CONTENT_DESCRIPTION
-    ).fill(
-        normalized_content_description
-    )
-
-    await page.locator(
-        DocumentSelectors.PUBLIC_ACCESS
-    ).select_option(
-        value=public_access
-    )
-
-    await _select_status(
-        page=page,
-        status=status,
-        timeout_ms=timeout_ms,
-    )
-
-    await _expand_dates_section(
-        page=page,
-        timeout_ms=timeout_ms,
-    )
-
-    await _fill_date_if_needed(
-        page=page,
-        selector=DocumentSelectors.DOCUMENT_DATE,
-        date_value=normalized_document_date,
-    )
-
-    await _fill_date_if_needed(
-        page=page,
-        selector=DocumentSelectors.JOURNAL_DATE,
-        date_value=normalized_journal_date,
-    )
-
-    logger.info(
-        "Gemmer dokumentet '%s' på caseId %s.",
-        normalized_title,
-        normalized_case_id,
-    )
-
-    save_button = page.locator(
-        DocumentSelectors.SAVE_BUTTON
-    )
-
-    await expect(
-        save_button
-    ).to_be_visible(
-        timeout=timeout_ms
-    )
-
-    await expect(
-        save_button
-    ).to_be_enabled(
-        timeout=timeout_ms
-    )
-
     try:
-        await save_button.click()
-
-        logger.info(
-            "Gem er aktiveret. Venter 3 sekunder på Acadre."
+        await open_document_upload_page(
+            page=page,
+            case_id=normalized_case_id,
+            timeout_ms=timeout_ms,
         )
 
-        await page.wait_for_timeout(3_000)
-
-        logger.info(
-            "URL efter Gem og ventetid: %s",
-            page.url,
+        await _take_screenshot_safely(
+            session=session,
+            page=page,
+            name="ACADRE_DOKUMENT_STEP_1_uploadside_aabnet",
         )
 
-        await page.wait_for_url(
-            "**/Frontend/CM/MainDocument/Details?**",
+        await page.locator(
+            DocumentSelectors.TITLE
+        ).fill(
+            normalized_title
+        )
+
+        file_input = page.locator(
+            DocumentSelectors.FILE_INPUT
+        )
+
+        await expect(
+            file_input
+        ).to_be_attached(
+            timeout=timeout_ms
+        )
+
+        await file_input.set_input_files(
+            str(resolved_file_path)
+        )
+
+        await _take_screenshot_safely(
+            session=session,
+            page=page,
+            name="ACADRE_DOKUMENT_STEP_2_fil_valgt",
+        )
+
+        await page.locator(
+            DocumentSelectors.DOCUMENT_TYPE
+        ).select_option(
+            value=document_type
+        )
+
+        await page.locator(
+            DocumentSelectors.CATEGORY
+        ).select_option(
+            value=normalized_category
+        )
+
+        await _fill_caseworker(
+            page=page,
+            caseworker=normalized_caseworker,
+            timeout_ms=timeout_ms,
+        )
+
+        await page.locator(
+            DocumentSelectors.CONTENT_DESCRIPTION
+        ).fill(
+            normalized_content_description
+        )
+
+        await page.locator(
+            DocumentSelectors.PUBLIC_ACCESS
+        ).select_option(
+            value=public_access
+        )
+
+        await _select_status(
+            page=page,
+            status=status,
+            timeout_ms=timeout_ms,
+        )
+
+        await _expand_dates_section(
+            page=page,
+            timeout_ms=timeout_ms,
+        )
+
+        await _fill_date_if_needed(
+            page=page,
+            selector=DocumentSelectors.DOCUMENT_DATE,
+            date_value=normalized_document_date,
+        )
+
+        await _fill_date_if_needed(
+            page=page,
+            selector=DocumentSelectors.JOURNAL_DATE,
+            date_value=normalized_journal_date,
+        )
+
+        await _take_screenshot_safely(
+            session=session,
+            page=page,
+            name="ACADRE_DOKUMENT_STEP_3_formular_udfyldt",
+        )
+
+        logger.info(
+            "Gemmer dokumentet '%s' på caseId %s.",
+            normalized_title,
+            normalized_case_id,
+        )
+
+        save_button = page.locator(
+            DocumentSelectors.SAVE_BUTTON
+        )
+
+        await expect(
+            save_button
+        ).to_be_visible(
+            timeout=timeout_ms
+        )
+
+        await expect(
+            save_button
+        ).to_be_enabled(
+            timeout=timeout_ms
+        )
+
+        await _take_screenshot_safely(
+            session=session,
+            page=page,
+            name="ACADRE_DOKUMENT_STEP_4_foer_gem",
+        )
+
+        try:
+            await save_button.click()
+
+            logger.info(
+                "Gem er aktiveret. Venter 3 sekunder på Acadre."
+            )
+
+            await page.wait_for_timeout(3_000)
+
+            logger.info(
+                "URL efter Gem og ventetid: %s",
+                page.url,
+            )
+
+            await page.wait_for_url(
+                "**/Frontend/CM/MainDocument/Details?**",
+                timeout=timeout_ms,
+            )
+
+        except Exception as error:
+            validation_messages = await _get_validation_messages(
+                page
+            )
+
+            await _take_screenshot_safely(
+                session=session,
+                page=page,
+                name="ACADRE_DOKUMENT_FEJL_efter_gem",
+                always=True,
+            )
+
+            raise RuntimeError(
+                "Dokumentet blev ikke viderestillet til Acadre "
+                "MainDocument/Details efter Gem.\n"
+                f"Aktuel URL: {page.url}\n"
+                f"Synlige valideringsbeskeder: "
+                f"{validation_messages}"
+            ) from error
+
+        await _take_screenshot_safely(
+            session=session,
+            page=page,
+            name="ACADRE_DOKUMENT_STEP_5_detaljeside_aabnet",
+        )
+
+        success_strip = page.locator(
+            DocumentSelectors.SUCCESS_STRIP
+        ).filter(
+            has_text="Dokumentet er oprettet."
+        )
+
+        await expect(
+            success_strip
+        ).to_have_count(
+            1,
             timeout=timeout_ms,
         )
 
-    except Exception as error:
-        validation_messages = await _get_validation_messages(page)
+        await expect(
+            success_strip
+        ).to_be_visible(
+            timeout=timeout_ms,
+        )
 
-        raise RuntimeError(
-            "Dokumentet blev ikke viderestillet til Acadre "
-            "MainDocument/Details efter Gem.\n"
-            f"Aktuel URL: {page.url}\n"
-            f"Synlige valideringsbeskeder: {validation_messages}"
-        ) from error
+        success_message_locator = success_strip.locator(
+            ".strip__content"
+        )
 
-    success_strip = page.locator(
-        DocumentSelectors.SUCCESS_STRIP
-    ).filter(
-        has_text="Dokumentet er oprettet."
-    )
+        await expect(
+            success_message_locator
+        ).to_contain_text(
+            "Dokumentet er oprettet.",
+            timeout=timeout_ms,
+        )
 
-    await expect(
-        success_strip
-    ).to_have_count(
-        1,
-        timeout=timeout_ms,
-    )
+        success_message = (
+            await success_message_locator.inner_text()
+        ).strip()
 
-    await expect(
-        success_strip
-    ).to_be_visible(
-        timeout=timeout_ms
-    )
+        document_id = _extract_document_id(
+            page.url
+        )
 
-    success_message_locator = success_strip.locator(
-        ".strip__content"
-    )
+        await _take_screenshot_safely(
+            session=session,
+            page=page,
+            name="ACADRE_DOKUMENT_STEP_6_dokument_oprettet",
+        )
 
-    await expect(
-        success_message_locator
-    ).to_contain_text(
-        "Dokumentet er oprettet.",
-        timeout=timeout_ms,
-    )
+        logger.info(
+            "Dokumentet blev oprettet med documentId %s.",
+            document_id,
+        )
 
-    success_message = (
-        await success_message_locator.inner_text()
-    ).strip()
+        return {
+            "case_id": normalized_case_id,
+            "document_id": document_id,
+            "document_url": page.url,
+            "success_message": success_message,
+            "file_path": str(resolved_file_path),
+        }
 
-    document_id = _extract_document_id(
-        page.url
-    )
+    except Exception:
+        await _take_screenshot_safely(
+            session=session,
+            page=page,
+            name="ACADRE_DOKUMENT_FEJL_upload_flow",
+            always=True,
+        )
 
-    logger.info(
-        "Dokumentet blev oprettet med documentId %s.",
-        document_id,
-    )
-
-    return {
-        "case_id": normalized_case_id,
-        "document_id": document_id,
-        "document_url": page.url,
-        "success_message": success_message,
-        "file_path": str(resolved_file_path),
-    }
+        raise
 
 async def _fill_caseworker(
     page: Page,
@@ -424,6 +484,55 @@ async def _fill_date_if_needed(
     await locator.fill(date_value)
     await locator.press("Tab")
 
+async def _take_screenshot_safely(
+    session,
+    page: Page,
+    name: str,
+    always: bool = False,
+) -> None:
+    """
+    Forsøger at gemme et screenshot via BrowserSession.
+
+    En screenshotfejl stopper ikke dokumentflowet og skjuler derfor
+    heller ikke den oprindelige Acadre-fejl.
+
+    Args:
+        session:
+            Den eksisterende BrowserSession.
+
+        page:
+            Den aktuelle Playwright-side.
+
+        name:
+            Et beskrivende screenshotnavn.
+
+        always:
+            True tager screenshot uafhængigt af sessionens
+            normale debug-indstilling.
+
+    Returns:
+        None.
+    """
+    try:
+        if session is None:
+            return
+
+        if page.is_closed():
+            return
+
+        await session.screenshot(
+            page=page,
+            name=name,
+            always=always,
+        )
+
+    except Exception as screenshot_error:
+        logger.warning(
+            "Screenshot '%s' kunne ikke gemmes: %s",
+            name,
+            screenshot_error,
+        )
+
 async def _get_validation_messages(
     page: Page,
 ) -> list[str]:
@@ -432,7 +541,9 @@ async def _get_validation_messages(
 
     Returns:
         En liste med normaliserede fejltekster.
-        Listen er tom, hvis Acadre ikke viser valideringsfejl.
+
+        Listen er tom, hvis Acadre ikke viser nogen synlige
+        validerings- eller fejlbeskeder.
     """
     validation_locator = page.locator(
         ".field-validation-error:visible, "
