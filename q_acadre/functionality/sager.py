@@ -682,6 +682,862 @@ def _extract_total_count(
 
     return None
 
+# ============================================================
+# START: get_case_by_id
+# ============================================================
+
+async def get_case_by_id(
+    page: Page,
+    case_id: str | int,
+    timeout_ms: int = 120_000,
+) -> dict[str, Any]:
+    """
+    Åbner en Acadre-sag direkte via caseId og henter de oplysninger,
+    der vises på detaljesiden.
+
+    Funktionen forsøger at hente:
+    - Formularfelter: input, select og textarea.
+    - Label/værdi-par fra definition lists.
+    - Label/værdi-par fra tabeller.
+    - Label/værdi-par fra almindelige Acadre-containere.
+    - Al synlig tekst fra sidens primære indhold.
+
+    Returns:
+        {
+            "case_id": "761319",
+            "case_url": "...",
+            "title": "...",
+            "fields": {...},
+            "visible_text": "...",
+            "diagnostics": {...},
+        }
+    """
+    if isinstance(case_id, bool):
+        raise ValueError(
+            "case_id må ikke være en bool-værdi."
+        )
+
+    normalized_case_id = str(case_id).strip()
+
+    if not normalized_case_id:
+        raise ValueError(
+            "case_id må ikke være tom."
+        )
+
+    if not normalized_case_id.isdigit():
+        raise ValueError(
+            "case_id skal være et positivt helt tal."
+        )
+
+    if int(normalized_case_id) <= 0:
+        raise ValueError(
+            "case_id skal være større end 0."
+        )
+
+    if timeout_ms < 1:
+        raise ValueError(
+            "timeout_ms skal være mindst 1."
+        )
+
+    case_url = (
+        f"{ACADRE_CASE_DETAILS_URL}"
+        f"?caseId={quote(normalized_case_id, safe='')}"
+    )
+
+    print()
+    print(
+        "Åbner Acadre-sag direkte med "
+        f"caseId={normalized_case_id}..."
+    )
+
+    try:
+        response = await page.goto(
+            case_url,
+            wait_until="domcontentloaded",
+            timeout=timeout_ms,
+        )
+    except Exception as error:
+        raise RuntimeError(
+            "Acadre-sagen kunne ikke åbnes for "
+            f"caseId '{normalized_case_id}'."
+        ) from error
+
+    if response is not None and not response.ok:
+        raise RuntimeError(
+            f"Acadre returnerede HTTP-status {response.status}, "
+            f"da sagen med caseId "
+            f"'{normalized_case_id}' blev åbnet."
+        )
+
+    try:
+        await page.wait_for_load_state(
+            "networkidle",
+            timeout=30_000,
+        )
+    except Exception:
+        print(
+            "Sagen blev ikke networkidle inden 30 sekunder. "
+            "Fortsætter, fordi DOM'en blev indlæst."
+        )
+
+    expected_url_part = (
+        "/Frontend/CM/Case/Details"
+        f"?caseId={normalized_case_id}"
+    )
+
+    if expected_url_part not in page.url:
+        raise RuntimeError(
+            "Acadre endte ikke på den forventede detaljeside.\n"
+            f"Forventede caseId: {normalized_case_id}\n"
+            f"Aktuel URL: {page.url}"
+        )
+
+    page_title = (await page.title()).strip()
+
+    extraction_result = await page.locator("body").evaluate(
+        """
+        body => {
+            const normalize = value => {
+                return (value || "")
+                    .replace(/\\u00a0/g, " ")
+                    .replace(/[ \\t]+/g, " ")
+                    .replace(/\\n[ \\t]+/g, "\\n")
+                    .replace(/\\n{3,}/g, "\\n\\n")
+                    .trim();
+            };
+
+            const isVisible = element => {
+                if (!element) {
+                    return false;
+                }
+
+                const style = window.getComputedStyle(element);
+
+                return (
+                    style.display !== "none" &&
+                    style.visibility !== "hidden" &&
+                    element.getAttribute("aria-hidden") !== "true" &&
+                    element.getClientRects().length > 0
+                );
+            };
+
+            const fields = {};
+
+            const addField = (rawLabel, rawValue) => {
+                const label = normalize(rawLabel)
+                    .replace(/[:*]+$/, "")
+                    .trim();
+
+                const value = normalize(rawValue);
+
+                if (!label || !value || label === value) {
+                    return;
+                }
+
+                let uniqueLabel = label;
+                let number = 2;
+
+                while (
+                    Object.prototype.hasOwnProperty.call(
+                        fields,
+                        uniqueLabel
+                    )
+                ) {
+                    if (fields[uniqueLabel] === value) {
+                        return;
+                    }
+
+                    uniqueLabel = `${label} (${number})`;
+                    number += 1;
+                }
+
+                fields[uniqueLabel] = value;
+            };
+
+            /*
+             * 1. Klassiske formularfelter.
+             */
+            const formElements = body.querySelectorAll(
+                "input, select, textarea"
+            );
+
+            for (const element of formElements) {
+                if (!isVisible(element)) {
+                    continue;
+                }
+
+                const type = (
+                    element.getAttribute("type") || ""
+                ).toLowerCase();
+
+                if (
+                    type === "hidden" ||
+                    type === "password" ||
+                    type === "submit" ||
+                    type === "button" ||
+                    type === "file"
+                ) {
+                    continue;
+                }
+
+                let value = "";
+
+                if (element.tagName === "SELECT") {
+                    const selectedOption =
+                        element.options[element.selectedIndex];
+
+                    value = selectedOption
+                        ? selectedOption.textContent
+                        : "";
+                } else if (
+                    type === "checkbox" ||
+                    type === "radio"
+                ) {
+                    if (!element.checked) {
+                        continue;
+                    }
+
+                    value = element.value || "true";
+                } else {
+                    value = element.value || "";
+                }
+
+                let label = "";
+
+                if (element.id) {
+                    const escapedId = CSS.escape(element.id);
+
+                    const explicitLabel = body.querySelector(
+                        `label[for="${escapedId}"]`
+                    );
+
+                    if (explicitLabel) {
+                        label = explicitLabel.textContent;
+                    }
+                }
+
+                if (!label) {
+                    const surroundingLabel =
+                        element.closest("label");
+
+                    if (surroundingLabel) {
+                        label = surroundingLabel.textContent;
+                    }
+                }
+
+                if (!label) {
+                    label =
+                        element.getAttribute("aria-label") ||
+                        element.getAttribute("placeholder") ||
+                        element.getAttribute("name") ||
+                        element.id ||
+                        "";
+                }
+
+                addField(label, value);
+            }
+
+            /*
+             * 2. Definition lists:
+             *
+             * <dt>Sagsnummer</dt>
+             * <dd>...</dd>
+             */
+            const definitionTerms =
+                body.querySelectorAll("dt");
+
+            for (const term of definitionTerms) {
+                if (!isVisible(term)) {
+                    continue;
+                }
+
+                let valueElement = term.nextElementSibling;
+
+                while (
+                    valueElement &&
+                    valueElement.tagName !== "DD"
+                ) {
+                    valueElement =
+                        valueElement.nextElementSibling;
+                }
+
+                if (
+                    valueElement &&
+                    isVisible(valueElement)
+                ) {
+                    addField(
+                        term.innerText,
+                        valueElement.innerText
+                    );
+                }
+            }
+
+            /*
+             * 3. Tabelrækker.
+             *
+             * Første celle bruges som label.
+             * De resterende celler bruges som værdi.
+             */
+            const tableRows =
+                body.querySelectorAll("tr");
+
+            for (const row of tableRows) {
+                if (!isVisible(row)) {
+                    continue;
+                }
+
+                const cells = Array.from(
+                    row.querySelectorAll(":scope > th, :scope > td")
+                ).filter(isVisible);
+
+                if (cells.length < 2) {
+                    continue;
+                }
+
+                const label = cells[0].innerText;
+
+                const value = cells
+                    .slice(1)
+                    .map(cell => normalize(cell.innerText))
+                    .filter(Boolean)
+                    .join(" | ");
+
+                addField(label, value);
+            }
+
+            /*
+             * 4. Almindelige label/værdi-containere.
+             *
+             * Understøtter flere typiske klassenavne uden at være
+             * afhængig af ét bestemt Acadre-layout.
+             */
+            const possibleRows = body.querySelectorAll(
+                ".form-group, " +
+                ".field, " +
+                ".form-field, " +
+                ".display-field, " +
+                ".control-group, " +
+                ".row"
+            );
+
+            const labelSelector = [
+                "label",
+                ".label",
+                ".field-label",
+                ".control-label",
+                ".display-label",
+                "[class*='label']"
+            ].join(", ");
+
+            const valueSelector = [
+                ".value",
+                ".field-value",
+                ".control-value",
+                ".display-field",
+                ".form-control-static",
+                "[class*='value']"
+            ].join(", ");
+
+            for (const row of possibleRows) {
+                if (!isVisible(row)) {
+                    continue;
+                }
+
+                const labelElement =
+                    row.querySelector(labelSelector);
+
+                const valueElement =
+                    row.querySelector(valueSelector);
+
+                if (
+                    labelElement &&
+                    valueElement &&
+                    labelElement !== valueElement &&
+                    isVisible(labelElement) &&
+                    isVisible(valueElement)
+                ) {
+                    addField(
+                        labelElement.innerText,
+                        valueElement.innerText
+                    );
+                }
+            }
+
+            /*
+             * 5. Hent al synlig tekst.
+             *
+             * main foretrækkes, så navigation og standardsidehoved
+             * ikke fylder unødigt i outputtet.
+             */
+            const contentElement =
+                body.querySelector("main") ||
+                body.querySelector("[role='main']") ||
+                body.querySelector(".main-content") ||
+                body.querySelector("#content") ||
+                body.querySelector(".content") ||
+                body;
+
+            const visibleText = normalize(
+                contentElement.innerText
+            );
+
+            return {
+                fields,
+                visibleText,
+                diagnostics: {
+                    formElementCount:
+                        formElements.length,
+                    definitionTermCount:
+                        definitionTerms.length,
+                    tableRowCount:
+                        tableRows.length,
+                    possibleRowCount:
+                        possibleRows.length,
+                    iframeCount:
+                        body.querySelectorAll("iframe").length,
+                },
+            };
+        }
+        """
+    )
+
+    fields = extraction_result["fields"]
+    visible_text = extraction_result["visibleText"]
+    diagnostics = extraction_result["diagnostics"]
+
+    print()
+    print(
+        f"Sagen med caseId={normalized_case_id} blev åbnet."
+    )
+    print(f"Aktuel URL: {page.url}")
+    print(f"Antal fundne label/værdi-par: {len(fields)}")
+    print(f"Diagnostik: {diagnostics}")
+
+    if visible_text:
+        print()
+        print("=" * 60)
+        print("SYNLIG TEKST FRA ACADRE")
+        print("=" * 60)
+        print(visible_text)
+        print("=" * 60)
+    else:
+        print(
+            "Der blev ikke fundet synlig tekst i hoveddokumentet."
+        )
+
+    return {
+        "case_id": normalized_case_id,
+        "case_url": page.url,
+        "title": page_title,
+        "fields": fields,
+        "visible_text": visible_text,
+        "diagnostics": diagnostics,
+    }
+
+
+# ============================================================
+# SLUT: get_case_by_id
+# ============================================================
+
+# ============================================================
+# START: get_case_details_by_id
+# ============================================================
+
+async def get_case_details_by_id(
+    page: Page,
+    case_id: str | int,
+    timeout_ms: int = 120_000,
+) -> dict[str, Any]:
+    """
+    Henter en Acadre-sag via et autentificeret GET-kald.
+
+    HTML-svaret parses til en dictionary med sagstitel,
+    sagsstatus og sagens label/værdi-felter.
+
+    Browserfanen navigeres ikke til sagen.
+    """
+    from html.parser import HTMLParser
+    from urllib.parse import quote
+
+    if isinstance(case_id, bool):
+        raise ValueError(
+            "case_id må ikke være en bool-værdi."
+        )
+
+    normalized_case_id = str(case_id).strip()
+
+    if not normalized_case_id:
+        raise ValueError(
+            "case_id må ikke være tom."
+        )
+
+    if not normalized_case_id.isdigit():
+        raise ValueError(
+            "case_id skal være et positivt helt tal."
+        )
+
+    if int(normalized_case_id) <= 0:
+        raise ValueError(
+            "case_id skal være større end 0."
+        )
+
+    if (
+        isinstance(timeout_ms, bool)
+        or not isinstance(timeout_ms, int)
+    ):
+        raise TypeError(
+            "timeout_ms skal være et helt tal."
+        )
+
+    if timeout_ms < 1:
+        raise ValueError(
+            "timeout_ms skal være mindst 1."
+        )
+
+    request_url = (
+        f"{ACADRE_CASE_DETAILS_URL}"
+        f"?caseId={quote(normalized_case_id, safe='')}"
+    )
+
+    print()
+    print(
+        "Henter Acadre-sag via GET-kald: "
+        f"caseId={normalized_case_id}"
+    )
+
+    response = await page.context.request.get(
+        request_url,
+        headers={
+            "Accept": (
+                "text/html,application/xhtml+xml,"
+                "application/xml;q=0.9,*/*;q=0.8"
+            ),
+            "Referer": (
+                f"{ACADRE_BASE_URL}/Frontend/CM/"
+            ),
+        },
+        timeout=timeout_ms,
+    )
+
+    response_text = await response.text()
+
+    print(
+        f"HTTP-status fra Acadre: {response.status}"
+    )
+
+    if not response.ok:
+        raise RuntimeError(
+            "Acadre GET-kaldet fejlede.\n"
+            f"CaseId: {normalized_case_id}\n"
+            f"HTTP-status: {response.status}\n"
+            f"Svar fra Acadre:\n"
+            f"{response_text[:2_000]}"
+        )
+
+    content_type = response.headers.get(
+        "content-type",
+        "",
+    )
+
+    if "<html" not in response_text.casefold():
+        raise RuntimeError(
+            "Acadre returnerede HTTP-success, men svaret "
+            "indeholder ikke et HTML-dokument.\n"
+            f"Content-Type: {content_type}"
+        )
+
+    class CaseDetailsParser(HTMLParser):
+        """
+        Parser de relevante elementer i Acadres HTML-svar.
+        """
+
+        def __init__(self) -> None:
+            super().__init__(
+                convert_charrefs=True
+            )
+
+            self.page_title_parts: list[str] = []
+            self.case_title_parts: list[str] = []
+            self.case_status_parts: list[str] = []
+            self.fields: dict[str, str] = {}
+
+            self.active_tags: list[str] = []
+            self.active_classes: list[set[str]] = []
+
+            self.in_page_title = False
+            self.in_case_title = False
+            self.in_case_status = False
+            self.in_form_group = False
+            self.in_label = False
+
+            self.current_label_parts: list[str] = []
+            self.current_group_text_parts: list[str] = []
+            self.form_group_depth = 0
+
+        @staticmethod
+        def normalize_text(
+            values: list[str],
+        ) -> str:
+            return " ".join(
+                " ".join(values).split()
+            ).strip()
+
+        def handle_starttag(
+            self,
+            tag: str,
+            attrs,
+        ) -> None:
+            attributes = {
+                name: value or ""
+                for name, value in attrs
+            }
+
+            classes = set(
+                attributes.get(
+                    "class",
+                    "",
+                ).split()
+            )
+
+            self.active_tags.append(tag)
+            self.active_classes.append(classes)
+
+            if tag == "title":
+                self.in_page_title = True
+
+            if "header-title" in classes:
+                self.in_case_title = True
+
+            if "boble" in classes:
+                self.in_case_status = True
+
+            if "form-group" in classes:
+                if not self.in_form_group:
+                    self.in_form_group = True
+                    self.form_group_depth = 1
+                    self.current_label_parts = []
+                    self.current_group_text_parts = []
+                else:
+                    self.form_group_depth += 1
+
+            elif self.in_form_group and tag not in {
+                "br",
+                "hr",
+                "img",
+                "input",
+                "meta",
+                "link",
+            }:
+                self.form_group_depth += 1
+
+            if (
+                self.in_form_group
+                and tag in {"label", "h3"}
+            ):
+                self.in_label = True
+
+        def handle_startendtag(
+            self,
+            tag: str,
+            attrs,
+        ) -> None:
+            # Input, meta og lignende har ingen tekst,
+            # som er relevant for sagens viste oplysninger.
+            return
+
+        def handle_data(
+            self,
+            data: str,
+        ) -> None:
+            text = data.strip()
+
+            if not text:
+                return
+
+            if self.in_page_title:
+                self.page_title_parts.append(text)
+
+            if self.in_case_title:
+                self.case_title_parts.append(text)
+
+            if self.in_case_status:
+                self.case_status_parts.append(text)
+
+            if self.in_form_group:
+                self.current_group_text_parts.append(text)
+
+                if self.in_label:
+                    self.current_label_parts.append(text)
+
+        def handle_endtag(
+            self,
+            tag: str,
+        ) -> None:
+            if tag == "title":
+                self.in_page_title = False
+
+            if self.in_case_title and tag == "span":
+                current_classes = (
+                    self.active_classes[-1]
+                    if self.active_classes
+                    else set()
+                )
+
+                if "header-title" in current_classes:
+                    self.in_case_title = False
+
+            if self.in_case_status and tag == "span":
+                current_classes = (
+                    self.active_classes[-1]
+                    if self.active_classes
+                    else set()
+                )
+
+                if "boble" in current_classes:
+                    self.in_case_status = False
+
+            if (
+                self.in_form_group
+                and tag in {"label", "h3"}
+            ):
+                self.in_label = False
+
+            if self.in_form_group:
+                self.form_group_depth -= 1
+
+                if self.form_group_depth == 0:
+                    self.finish_form_group()
+
+            if self.active_tags:
+                self.active_tags.pop()
+
+            if self.active_classes:
+                self.active_classes.pop()
+
+        def finish_form_group(self) -> None:
+            label = self.normalize_text(
+                self.current_label_parts
+            ).rstrip(":").strip()
+
+            group_text = self.normalize_text(
+                self.current_group_text_parts
+            )
+
+            value = group_text
+
+            if label:
+                if value.startswith(f"{label}:"):
+                    value = value[
+                        len(label) + 1:
+                    ].strip()
+                elif value.startswith(label):
+                    value = value[
+                        len(label):
+                    ].strip()
+
+                if label not in self.fields:
+                    self.fields[label] = value
+
+            self.in_form_group = False
+            self.in_label = False
+            self.current_label_parts = []
+            self.current_group_text_parts = []
+            self.form_group_depth = 0
+
+    parser = CaseDetailsParser()
+
+    try:
+        parser.feed(response_text)
+        parser.close()
+    except Exception as error:
+        raise RuntimeError(
+            "HTML-svaret fra Acadre kunne ikke parses."
+        ) from error
+
+    page_title = parser.normalize_text(
+        parser.page_title_parts
+    )
+
+    case_title = parser.normalize_text(
+        parser.case_title_parts
+    )
+
+    case_status = parser.normalize_text(
+        parser.case_status_parts
+    )
+
+    fields = parser.fields
+
+    if case_status:
+        fields["Sagsstatus"] = case_status
+
+    if not case_title:
+        raise RuntimeError(
+            "Acadre returnerede HTML, men sagstitlen "
+            "kunne ikke findes."
+        )
+
+    if not fields:
+        raise RuntimeError(
+            "Acadre returnerede HTML, men der blev ikke "
+            "fundet genkendelige sagsfelter."
+        )
+
+    expected_field_names = (
+        "Sagsnummer",
+        "Sagstype",
+        "Ejendomsnummer",
+        "Matrikelnummer",
+        "Sagsindhold",
+        "Sagsansvarlig",
+    )
+
+    missing_expected_fields = [
+        field_name
+        for field_name in expected_field_names
+        if field_name not in fields
+    ]
+
+    print()
+    print("=" * 60)
+    print("ACADRE-SAGEN BLEV HENTET VIA GET")
+    print("=" * 60)
+    print(f"Case ID: {normalized_case_id}")
+    print(f"Titel: {case_title}")
+    print(f"Sagsstatus: {case_status}")
+    print(f"Antal fundne felter: {len(fields)}")
+
+    if missing_expected_fields:
+        print(
+            "Forventede felter, der ikke blev fundet: "
+            f"{missing_expected_fields}"
+        )
+
+    result = {
+        "case_id": normalized_case_id,
+        "request_url": request_url,
+        "http_status": response.status,
+        "content_type": content_type,
+        "page_title": page_title,
+        "title": case_title,
+        "case_status": case_status,
+        "fields": fields,
+        "missing_expected_fields": (
+            missing_expected_fields
+        ),
+    }
+
+    print(
+        f"Returnerer resultat med nøgler: "
+        f"{list(result.keys())}"
+    )
+
+    return result
+
+
+# ============================================================
+# SLUT: get_case_details_by_id
+# ============================================================
 
 async def find_and_open_case(
     page: Page,
