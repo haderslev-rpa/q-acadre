@@ -16,6 +16,10 @@ ACADRE_GRID_API_URL = (
     f"{ACADRE_BASE_URL}/Frontend/CM/Case/GetGridContextData"
 )
 
+ACADRE_CASE_DETAILS_URL = (
+    f"{ACADRE_BASE_URL}/Frontend/CM/Case/Details"
+)
+
 
 def _default_sorting_columns() -> list[dict[str, str]]:
     """
@@ -24,7 +28,6 @@ def _default_sorting_columns() -> list[dict[str, str]]:
     Returns:
         Liste med sortering efter seneste ændringsdato.
     """
-
     return [
         {
             "ColumnKey": "case-last-modification-date",
@@ -40,7 +43,6 @@ def _default_custom_fields() -> list[dict[str, Any]]:
     Returns:
         Liste med custom-field-definitioner.
     """
-
     custom_fields = []
 
     for index, db_name in enumerate(
@@ -120,9 +122,10 @@ async def case_search(
             "raw_first_response": første rå Acadre-svar
         }
     """
-
     if not isinstance(filter_key, str):
-        raise ValueError("filter_key skal være en tekststreng.")
+        raise ValueError(
+            "filter_key skal være en tekststreng."
+        )
 
     base_payload = {
         "Identifier": identifier,
@@ -220,9 +223,9 @@ async def case_search_full(
     Udfører full search og henter automatisk alle resultatsider.
 
     Alle felter fra det observerede Acadre-request kan gives som input.
-    
+
     OBS: VIRKER IKKE AT SØGE PÅ TILE!!
-            
+
     Returns:
         Dictionary med alle samlede resultater:
 
@@ -234,7 +237,6 @@ async def case_search_full(
             "raw_first_response": første rå Acadre-svar
         }
     """
-
     base_payload = {
         "Identifier": identifier,
         "PageSize": page_size,
@@ -326,6 +328,7 @@ async def _fetch_all_pages(
     Henter automatisk alle sider fra Acadre.
 
     Første svar bruges til at finde:
+
     - Den samlede mængde resultater
     - Listen med resultater
     - Antal nødvendige sider
@@ -333,11 +336,12 @@ async def _fetch_all_pages(
     Returns:
         Et samlet resultat med alle items.
     """
-
     page_size = base_payload["PageSize"]
 
     if page_size < 1:
-        raise ValueError("page_size skal være mindst 1.")
+        raise ValueError(
+            "page_size skal være mindst 1."
+        )
 
     if start_page_index < 0:
         raise ValueError(
@@ -379,7 +383,9 @@ async def _fetch_all_pages(
 
         while len(first_items) == page_size:
             if request_delay_seconds > 0:
-                await asyncio.sleep(request_delay_seconds)
+                await asyncio.sleep(
+                    request_delay_seconds
+                )
 
             response_data = await _fetch_page(
                 page=page,
@@ -417,16 +423,26 @@ async def _fetch_all_pages(
             remaining_count / page_size
         )
 
-        print(f"Samlet antal resultater: {total_count}")
-        print(f"Resultater på første side: {len(first_items)}")
-        print(f"Resterende resultater: {remaining_count}")
-        print(f"Resterende API-kald: {remaining_pages}")
+        print(
+            f"Samlet antal resultater: {total_count}"
+        )
+        print(
+            f"Resultater på første side: {len(first_items)}"
+        )
+        print(
+            f"Resterende resultater: {remaining_count}"
+        )
+        print(
+            f"Resterende API-kald: {remaining_pages}"
+        )
 
         for offset in range(1, remaining_pages + 1):
             page_index = start_page_index + offset
 
             if request_delay_seconds > 0:
-                await asyncio.sleep(request_delay_seconds)
+                await asyncio.sleep(
+                    request_delay_seconds
+                )
 
             response_data = await _fetch_page(
                 page=page,
@@ -457,7 +473,10 @@ async def _fetch_all_pages(
                 f"{total_count}."
             )
 
-    if total_count is not None and len(all_items) > total_count:
+    if (
+        total_count is not None
+        and len(all_items) > total_count
+    ):
         all_items = all_items[:total_count]
 
     return {
@@ -481,11 +500,11 @@ async def _fetch_page(
     Returns:
         Acadres JSON-svar for den pågældende side.
     """
-
     page_index = payload["PageIndex"]
 
     print(
-        f"Sender {operation_name}, PageIndex={page_index}..."
+        f"Sender {operation_name}, "
+        f"PageIndex={page_index}..."
     )
 
     response = await page.context.request.post(
@@ -509,7 +528,8 @@ async def _fetch_page(
     return await _read_json_response(
         response=response,
         operation_name=(
-            f"{operation_name}, PageIndex={page_index}"
+            f"{operation_name}, "
+            f"PageIndex={page_index}"
         ),
     )
 
@@ -524,25 +544,27 @@ async def _read_json_response(
     Returns:
         Dictionary eller liste fra Acadre.
     """
-
     if not response.ok:
         response_text = await response.text()
 
         raise RuntimeError(
             f"{operation_name} fejlede.\n"
             f"HTTP-status: {response.status}\n"
-            f"Svar fra Acadre:\n{response_text}"
+            f"Svar fra Acadre:\n"
+            f"{response_text}"
         )
 
     try:
         return await response.json()
+
     except Exception as error:
         response_text = await response.text()
 
         raise RuntimeError(
             f"{operation_name} returnerede ikke gyldigt JSON.\n"
             f"HTTP-status: {response.status}\n"
-            f"Svar fra Acadre:\n{response_text}"
+            f"Svar fra Acadre:\n"
+            f"{response_text}"
         ) from error
 
 
@@ -553,6 +575,7 @@ def _extract_items(
     Finder resultatlisten i Acadre-svaret.
 
     Understøtter blandt andet:
+
     - Data
     - data
     - Items
@@ -565,7 +588,6 @@ def _extract_items(
     Returns:
         Listen med resultater.
     """
-
     if isinstance(response_data, list):
         return response_data
 
@@ -595,7 +617,8 @@ def _extract_items(
 
     raise RuntimeError(
         "Kunne ikke finde resultatlisten i Acadre-svaret. "
-        f"Felter på øverste niveau: {list(response_data.keys())}"
+        f"Felter på øverste niveau: "
+        f"{list(response_data.keys())}"
     )
 
 
@@ -606,6 +629,7 @@ def _extract_total_count(
     Finder det samlede antal resultater i Acadre-svaret.
 
     Understøtter blandt andet:
+
     - Total
     - total
     - TotalCount
@@ -618,7 +642,6 @@ def _extract_total_count(
     Returns:
         Samlet antal som heltal eller None.
     """
-
     if isinstance(response_data, list):
         return None
 
@@ -638,10 +661,16 @@ def _extract_total_count(
     for key in total_keys:
         value = response_data.get(key)
 
-        if isinstance(value, int) and not isinstance(value, bool):
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+        ):
             return value
 
-        if isinstance(value, str) and value.isdigit():
+        if (
+            isinstance(value, str)
+            and value.isdigit()
+        ):
             return int(value)
 
     for value in response_data.values():
@@ -650,5 +679,241 @@ def _extract_total_count(
 
             if nested_total is not None:
                 return nested_total
+
+    return None
+
+
+async def find_and_open_case(
+    page: Page,
+    case_number: str,
+    case_type: str = "",
+    responsible_unit: str = "",
+    page_size: int = 50,
+    timeout_ms: int = 120_000,
+) -> dict[str, Any]:
+    """
+    Finder en Acadre-sag ud fra sagsnummeret og åbner sagen direkte.
+
+    Funktionen søger via den eksisterende case_search(), finder et
+    entydigt resultat, udtrækker caseId og åbner sagen via den direkte
+    Details-URL.
+
+    Returns:
+        Dictionary med case_number, case_id, case_url og item.
+    """
+    if not isinstance(case_number, str) or not case_number.strip():
+        raise ValueError(
+            "case_number skal være en tekststreng med et sagsnummer."
+        )
+
+    if page_size < 1:
+        raise ValueError("page_size skal være mindst 1.")
+
+    if timeout_ms < 1:
+        raise ValueError("timeout_ms skal være mindst 1.")
+
+    normalized_case_number = case_number.strip()
+
+    search_result = await case_search(
+        page=page,
+        filter_key=normalized_case_number,
+        page_size=page_size,
+        case_type=case_type,
+        responsible_unit=responsible_unit,
+        start_page_index=0,
+    )
+
+    items = search_result["items"]
+
+    if not items:
+        raise LookupError(
+            f"Ingen Acadre-sag blev fundet for sagsnummeret "
+            f"'{normalized_case_number}'."
+        )
+
+    exact_matches = _find_exact_case_matches(
+        items=items,
+        case_number=normalized_case_number,
+    )
+
+    if len(exact_matches) == 1:
+        case_item = exact_matches[0]
+    elif len(items) == 1:
+        case_item = items[0]
+    elif not exact_matches:
+        raise LookupError(
+            f"Acadre returnerede {len(items)} resultater for "
+            f"sagsnummeret '{normalized_case_number}', men ingen "
+            "kunne vælges entydigt."
+        )
+    else:
+        raise LookupError(
+            f"Acadre returnerede {len(exact_matches)} resultater, "
+            f"som indeholder sagsnummeret '{normalized_case_number}'."
+        )
+
+    case_id = _extract_case_id(case_item)
+
+    if case_id is None:
+        raise RuntimeError(
+            f"Sagen '{normalized_case_number}' blev fundet, men "
+            "resultatet indeholder ikke et genkendeligt caseId. "
+            f"Tilgængelige felter: {list(case_item.keys())}"
+        )
+
+    case_url = (
+        f"{ACADRE_CASE_DETAILS_URL}"
+        f"?caseId={quote(str(case_id), safe='')}"
+    )
+
+    try:
+        response = await page.goto(
+            case_url,
+            wait_until="domcontentloaded",
+            timeout=timeout_ms,
+        )
+    except Exception as error:
+        raise RuntimeError(
+            f"Sagen '{normalized_case_number}' med caseId "
+            f"'{case_id}' kunne ikke åbnes via '{case_url}'."
+        ) from error
+
+    if response is not None and not response.ok:
+        raise RuntimeError(
+            f"Acadre returnerede HTTP-status {response.status}, "
+            f"da sagen '{normalized_case_number}' blev åbnet."
+        )
+
+    try:
+        await page.wait_for_load_state(
+            "networkidle",
+            timeout=30_000,
+        )
+    except Exception:
+        print(
+            "Sagen blev ikke networkidle inden 30 sekunder. "
+            "Fortsætter, fordi DOM'en blev indlæst."
+        )
+
+    return {
+        "case_number": normalized_case_number,
+        "case_id": case_id,
+        "case_url": page.url,
+        "item": case_item,
+    }
+
+
+def _find_exact_case_matches(
+    items: list[dict[str, Any]],
+    case_number: str,
+) -> list[dict[str, Any]]:
+    """Finder resultater, der indeholder det præcise sagsnummer."""
+    expected_value = case_number.strip().casefold()
+
+    return [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and _item_contains_exact_value(
+            value=item,
+            expected_value=expected_value,
+        )
+    ]
+
+
+def _item_contains_exact_value(
+    value: Any,
+    expected_value: str,
+) -> bool:
+    """Leder rekursivt efter en præcis værdi i et API-resultat."""
+    if isinstance(value, dict):
+        return any(
+            _item_contains_exact_value(
+                value=nested_value,
+                expected_value=expected_value,
+            )
+            for nested_value in value.values()
+        )
+
+    if isinstance(value, list):
+        return any(
+            _item_contains_exact_value(
+                value=list_item,
+                expected_value=expected_value,
+            )
+            for list_item in value
+        )
+
+    if value is None or isinstance(value, bool):
+        return False
+
+    if isinstance(value, (str, int, float)):
+        return str(value).strip().casefold() == expected_value
+
+    return False
+
+
+def _extract_case_id(
+    item: dict[str, Any],
+) -> str | int | None:
+    """
+    Finder caseId i et Acadre-søgeresultat.
+
+    Acadre returnerer normalt sagens interne ID i top-level-feltet
+    "Id". Funktionen understøtter desuden eksplicitte varianter som
+    "caseId", "case_id" og "case-id" samt indlejrede dictionaries.
+
+    Returns:
+        Sagens interne ID som tekst eller heltal.
+
+        Returnerer None, hvis der ikke findes et gyldigt ID.
+    """
+    if not isinstance(item, dict):
+        return None
+
+    explicit_case_id_fields = {
+        "caseid",
+        "case_id",
+        "case-id",
+    }
+
+    for key, value in item.items():
+        normalized_key = str(key).strip().casefold()
+
+        if normalized_key in explicit_case_id_fields:
+            if isinstance(value, bool):
+                continue
+
+            if isinstance(value, (str, int)):
+                normalized_value = str(value).strip()
+
+                if normalized_value:
+                    return value
+
+    top_level_id = item.get("Id")
+
+    if not isinstance(top_level_id, bool):
+        if isinstance(top_level_id, (str, int)):
+            normalized_top_level_id = str(top_level_id).strip()
+
+            if normalized_top_level_id:
+                return top_level_id
+
+    for value in item.values():
+        if isinstance(value, dict):
+            nested_case_id = _extract_case_id(value)
+
+            if nested_case_id is not None:
+                return nested_case_id
+
+        elif isinstance(value, list):
+            for list_item in value:
+                if not isinstance(list_item, dict):
+                    continue
+
+                nested_case_id = _extract_case_id(list_item)
+
+                if nested_case_id is not None:
+                    return nested_case_id
 
     return None
