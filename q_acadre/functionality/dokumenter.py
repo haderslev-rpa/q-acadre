@@ -269,6 +269,10 @@ async def upload_document_to_case(
 
     Datoværdier skal gives som dd-mm-yyyy.
 
+    Kategori vælges ud fra den synlige optiontekst, eksempelvis
+    "Andet - Andet". Acadres underliggende option-value kan være
+    en kortere værdi, eksempelvis "Andet".
+
     Returns:
         Dictionary med case_id, document_id, document_url,
         success_message og file_path.
@@ -361,23 +365,34 @@ async def upload_document_to_case(
             ),
         )
 
+        # ----------------------------------------------------
+        # TITEL
+        # ----------------------------------------------------
+
         title_locator = page.locator(
             DocumentSelectors.TITLE
         )
+
         await expect(
             title_locator
         ).to_be_visible(
             timeout=timeout_ms,
         )
+
         await title_locator.fill(
             normalized_title
         )
+
         await expect(
             title_locator
         ).to_have_value(
             normalized_title,
             timeout=timeout_ms,
         )
+
+        # ----------------------------------------------------
+        # IMPORTER FIL
+        # ----------------------------------------------------
 
         await _select_import_file_mode(
             page=page,
@@ -387,11 +402,13 @@ async def upload_document_to_case(
         file_input = page.locator(
             DocumentSelectors.FILE_INPUT
         )
+
         await expect(
             file_input
         ).to_be_attached(
             timeout=timeout_ms,
         )
+
         await file_input.set_input_files(
             str(resolved_file_path)
         )
@@ -416,71 +433,123 @@ async def upload_document_to_case(
             ),
         )
 
+        # ----------------------------------------------------
+        # DOKUMENTTYPE
+        # ----------------------------------------------------
+
         document_type_locator = page.locator(
             DocumentSelectors.DOCUMENT_TYPE
         )
+
         await expect(
             document_type_locator
         ).to_be_visible(
             timeout=timeout_ms,
         )
+
         await document_type_locator.select_option(
             value=document_type
         )
+
         await expect(
             document_type_locator
         ).to_have_value(
             document_type,
             timeout=timeout_ms,
         )
+
+        selected_document_type_label = (
+            await document_type_locator.locator(
+                "option:checked"
+            ).inner_text()
+        ).strip()
+
         logger.info(
-            "Dokumenttype er valgt med værdien '%s'.",
+            "Dokumenttype er valgt: value=%r, label=%r.",
             document_type,
+            selected_document_type_label,
         )
+
+        # ----------------------------------------------------
+        # KATEGORI
+        # ----------------------------------------------------
 
         category_locator = page.locator(
             DocumentSelectors.CATEGORY
         )
+
         await expect(
             category_locator
         ).to_be_visible(
             timeout=timeout_ms,
         )
+
+        # category indeholder den viste Acadre-tekst,
+        # eksempelvis "Andet - Andet".
         await category_locator.select_option(
-            value=normalized_category
+            label=normalized_category
         )
-        await expect(
-            category_locator
-        ).to_have_value(
-            normalized_category,
-            timeout=timeout_ms,
-        )
+
+        selected_category_label = (
+            await category_locator.locator(
+                "option:checked"
+            ).inner_text()
+        ).strip()
+
+        selected_category_value = (
+            await category_locator.input_value()
+        ).strip()
+
+        if (
+            selected_category_label.casefold()
+            != normalized_category.casefold()
+        ):
+            raise RuntimeError(
+                "Acadre valgte en uventet kategori.\n"
+                f"Forventet label: {normalized_category!r}\n"
+                f"Valgt label: {selected_category_label!r}\n"
+                f"Valgt value: {selected_category_value!r}"
+            )
+
         logger.info(
-            "Kategori er valgt med værdien '%s'.",
-            normalized_category,
+            "Kategori er valgt: value=%r, label=%r.",
+            selected_category_value,
+            selected_category_label,
         )
+
+        # ----------------------------------------------------
+        # SAGSBEHANDLER
+        # ----------------------------------------------------
 
         await _fill_caseworker(
             page=page,
             caseworker=normalized_caseworker,
             timeout_ms=timeout_ms,
         )
+
         logger.info(
             "Sagsbehandler er udfyldt med '%s'.",
             normalized_caseworker,
         )
 
+        # ----------------------------------------------------
+        # INDHOLDSBESKRIVELSE
+        # ----------------------------------------------------
+
         content_description_locator = page.locator(
             DocumentSelectors.CONTENT_DESCRIPTION
         )
+
         await expect(
             content_description_locator
         ).to_be_visible(
             timeout=timeout_ms,
         )
+
         await content_description_locator.fill(
             normalized_content_description
         )
+
         await expect(
             content_description_locator
         ).to_have_value(
@@ -488,17 +557,24 @@ async def upload_document_to_case(
             timeout=timeout_ms,
         )
 
+        # ----------------------------------------------------
+        # AKTINDSIGT
+        # ----------------------------------------------------
+
         public_access_locator = page.locator(
             DocumentSelectors.PUBLIC_ACCESS
         )
+
         await expect(
             public_access_locator
         ).to_be_visible(
             timeout=timeout_ms,
         )
+
         await public_access_locator.select_option(
             value=public_access
         )
+
         await expect(
             public_access_locator
         ).to_have_value(
@@ -506,21 +582,31 @@ async def upload_document_to_case(
             timeout=timeout_ms,
         )
 
+        # ----------------------------------------------------
+        # STATUS
+        # ----------------------------------------------------
+
         await _select_status(
             page=page,
             status=status,
             timeout_ms=timeout_ms,
         )
 
+        # ----------------------------------------------------
+        # DATOER
+        # ----------------------------------------------------
+
         await _expand_dates_section(
             page=page,
             timeout_ms=timeout_ms,
         )
+
         await _fill_date_if_needed(
             page=page,
             selector=DocumentSelectors.DOCUMENT_DATE,
             date_value=normalized_document_date,
         )
+
         await _fill_date_if_needed(
             page=page,
             selector=DocumentSelectors.JOURNAL_DATE,
@@ -535,6 +621,7 @@ async def upload_document_to_case(
             normalized_document_date,
             timeout=timeout_ms,
         )
+
         await expect(
             page.locator(
                 DocumentSelectors.JOURNAL_DATE
@@ -554,6 +641,10 @@ async def upload_document_to_case(
             always=True,
         )
 
+        # ----------------------------------------------------
+        # GEM
+        # ----------------------------------------------------
+
         logger.info(
             "Gemmer dokumentet '%s' på caseId %s.",
             normalized_title,
@@ -563,11 +654,13 @@ async def upload_document_to_case(
         save_button = page.locator(
             DocumentSelectors.SAVE_BUTTON
         )
+
         await expect(
             save_button
         ).to_be_visible(
             timeout=timeout_ms,
         )
+
         await expect(
             save_button
         ).to_be_enabled(
@@ -597,6 +690,7 @@ async def upload_document_to_case(
                 wait_until="domcontentloaded",
                 timeout=timeout_ms,
             )
+
         except Exception as error:
             validation_messages = (
                 await _get_validation_messages(
@@ -624,6 +718,10 @@ async def upload_document_to_case(
                 f"{validation_messages}"
             ) from error
 
+        # ----------------------------------------------------
+        # KVITTERING
+        # ----------------------------------------------------
+
         await _take_screenshot_safely(
             session=session,
             page=page,
@@ -638,21 +736,26 @@ async def upload_document_to_case(
         ).filter(
             has_text="Dokumentet er oprettet."
         )
+
         await expect(
             success_strip
         ).to_have_count(
             1,
             timeout=timeout_ms,
         )
+
         await expect(
             success_strip
         ).to_be_visible(
             timeout=timeout_ms,
         )
 
-        success_message_locator = success_strip.locator(
-            ".strip__content"
+        success_message_locator = (
+            success_strip.locator(
+                ".strip__content"
+            )
         )
+
         await expect(
             success_message_locator
         ).to_contain_text(
@@ -663,6 +766,7 @@ async def upload_document_to_case(
         success_message = (
             await success_message_locator.inner_text()
         ).strip()
+
         document_id = _extract_document_id(
             page.url
         )
@@ -686,7 +790,9 @@ async def upload_document_to_case(
             "document_id": document_id,
             "document_url": page.url,
             "success_message": success_message,
-            "file_path": str(resolved_file_path),
+            "file_path": str(
+                resolved_file_path
+            ),
         }
 
     except Exception:
@@ -705,7 +811,6 @@ async def upload_document_to_case(
 # ============================================================
 # SLUT: upload_document_to_case
 # ============================================================
-
 
 # ============================================================
 # START: _fill_caseworker
