@@ -70,6 +70,92 @@ async def open_document_upload_page(
         "page": page,
     }
 
+# ============================================================
+# START: _select_import_file_mode
+# ============================================================
+
+async def _select_import_file_mode(
+    page: Page,
+    timeout_ms: int,
+) -> None:
+    """
+    Vælger radioknappen "Importer fil" på Acadre-formularen.
+
+    Funktionen finder radioknappen ud fra den synlige tekst i stedet
+    for et dynamisk Acadre-id.
+
+    Output:
+        None.
+
+    Fejl:
+        RuntimeError, hvis valgmuligheden ikke findes, hvis der findes
+        flere kandidater, eller hvis radioknappen ikke bliver valgt.
+    """
+    import_text = page.get_by_text(
+        "Importer fil",
+        exact=True,
+    )
+
+    await expect(
+        import_text
+    ).to_be_visible(
+        timeout=timeout_ms,
+    )
+
+    import_container = import_text.locator(
+        "xpath=ancestor::*[.//input[@type='radio']][1]"
+    )
+
+    radio = import_container.locator(
+        'input[type="radio"]'
+    )
+
+    radio_count = await radio.count()
+
+    if radio_count != 1:
+        raise RuntimeError(
+            "Kunne ikke identificere præcis én radioknap "
+            "til 'Importer fil'. "
+            f"Antal fundne radioknapper: {radio_count}."
+        )
+
+    import_radio = radio.first
+
+    await expect(
+        import_radio
+    ).to_be_attached(
+        timeout=timeout_ms,
+    )
+
+    await expect(
+        import_radio
+    ).to_be_enabled(
+        timeout=timeout_ms,
+    )
+
+    if not await import_radio.is_checked():
+        await import_radio.check(
+            force=True,
+        )
+
+    await expect(
+        import_radio
+    ).to_be_checked(
+        timeout=timeout_ms,
+    )
+
+    logger.info(
+        "Acadre er sat til 'Importer fil'."
+    )
+
+
+# ============================================================
+# SLUT: _select_import_file_mode
+# ============================================================
+
+# ============================================================
+# START: upload_document_to_case
+# ============================================================
 
 async def upload_document_to_case(
     page: Page,
@@ -88,41 +174,51 @@ async def upload_document_to_case(
     timeout_ms: int = 120_000,
 ) -> dict[str, Any]:
     """
-    Åbner Opret dokument, udfylder felterne, uploader filen og gemmer.
+    Åbner Opret dokument, vælger "Importer fil", udfylder
+    formularen, uploader filen og gemmer dokumentet.
 
-    Datoværdier skal gives som dd-mm-yyyy. Funktionen beholder en dato,
-    hvis feltet allerede indeholder præcis den ønskede værdi.
-
-    Screenshots håndteres af den eksisterende BrowserSession.
+    Datoværdier skal gives som dd-mm-yyyy.
 
     Returns:
-        Dictionary med case_id, document_id, document_url,
-        success_message og file_path.
+        Dictionary med:
+        - case_id
+        - document_id
+        - document_url
+        - success_message
+        - file_path
     """
     normalized_case_id = _normalize_required_value(
         case_id,
         "case_id",
     )
+
     normalized_title = _normalize_required_value(
         title,
         "title",
     )
+
     normalized_category = _normalize_required_value(
         category,
         "category",
     )
+
     normalized_caseworker = _normalize_required_value(
         caseworker,
         "caseworker",
     )
-    normalized_content_description = _normalize_required_value(
-        content_description,
-        "content_description",
+
+    normalized_content_description = (
+        _normalize_required_value(
+            content_description,
+            "content_description",
+        )
     )
+
     normalized_document_date = _normalize_required_value(
         document_date,
         "document_date",
     )
+
     normalized_journal_date = _normalize_required_value(
         journal_date,
         "journal_date",
@@ -133,22 +229,44 @@ async def upload_document_to_case(
         DOCUMENT_TYPE_VALUES,
         "document_type",
     )
+
     _validate_choice(
         public_access,
         PUBLIC_ACCESS_VALUES,
         "public_access",
     )
+
     _validate_choice(
         status,
         STATUS_VALUES,
         "status",
     )
 
-    resolved_file_path = Path(file_path).expanduser().resolve()
+    if (
+        isinstance(timeout_ms, bool)
+        or not isinstance(timeout_ms, int)
+    ):
+        raise TypeError(
+            "timeout_ms skal være et helt tal."
+        )
+
+    if timeout_ms < 1:
+        raise ValueError(
+            "timeout_ms skal være mindst 1."
+        )
+
+    resolved_file_path = Path(
+        file_path
+    ).expanduser().resolve()
 
     if not resolved_file_path.is_file():
         raise FileNotFoundError(
             f"Filen findes ikke: {resolved_file_path}"
+        )
+
+    if resolved_file_path.stat().st_size == 0:
+        raise RuntimeError(
+            f"Filen er tom: {resolved_file_path}"
         )
 
     try:
@@ -161,13 +279,39 @@ async def upload_document_to_case(
         await _take_screenshot_safely(
             session=session,
             page=page,
-            name="ACADRE_DOKUMENT_STEP_1_uploadside_aabnet",
+            name=(
+                "ACADRE_DOKUMENT_STEP_1_"
+                "uploadside_aabnet"
+            ),
         )
 
-        await page.locator(
+        title_locator = page.locator(
             DocumentSelectors.TITLE
-        ).fill(
+        )
+
+        await expect(
+            title_locator
+        ).to_be_visible(
+            timeout=timeout_ms,
+        )
+
+        await title_locator.fill(
             normalized_title
+        )
+
+        await expect(
+            title_locator
+        ).to_have_value(
+            normalized_title,
+            timeout=timeout_ms,
+        )
+
+        # VIGTIGT:
+        # Acadre står som standard på "Start program".
+        # Robotten skal eksplicit vælge "Importer fil".
+        await _select_import_file_mode(
+            page=page,
+            timeout_ms=timeout_ms,
         )
 
         file_input = page.locator(
@@ -177,29 +321,94 @@ async def upload_document_to_case(
         await expect(
             file_input
         ).to_be_attached(
-            timeout=timeout_ms
+            timeout=timeout_ms,
         )
 
         await file_input.set_input_files(
             str(resolved_file_path)
         )
 
+        uploaded_file_count = await file_input.evaluate(
+            """
+            element => {
+                return element.files
+                    ? element.files.length
+                    : 0;
+            }
+            """
+        )
+
+        if uploaded_file_count != 1:
+            raise RuntimeError(
+                "Acadre-filfeltet indeholder ikke præcis én fil "
+                "efter set_input_files(). "
+                f"Antal filer: {uploaded_file_count}."
+            )
+
+        uploaded_file_name = await file_input.evaluate(
+            """
+            element => {
+                if (
+                    !element.files ||
+                    element.files.length !== 1
+                ) {
+                    return "";
+                }
+
+                return element.files[0].name || "";
+            }
+            """
+        )
+
+        if uploaded_file_name != resolved_file_path.name:
+            raise RuntimeError(
+                "Acadre-filfeltet indeholder et uventet filnavn.\n"
+                f"Forventet: {resolved_file_path.name!r}\n"
+                f"Fundet: {uploaded_file_name!r}"
+            )
+
+        logger.info(
+            "Filen '%s' er valgt til import.",
+            uploaded_file_name,
+        )
+
         await _take_screenshot_safely(
             session=session,
             page=page,
-            name="ACADRE_DOKUMENT_STEP_2_fil_valgt",
+            name=(
+                "ACADRE_DOKUMENT_STEP_2_"
+                "importfil_valgt"
+            ),
         )
 
-        await page.locator(
+        document_type_locator = page.locator(
             DocumentSelectors.DOCUMENT_TYPE
-        ).select_option(
+        )
+
+        await document_type_locator.select_option(
             value=document_type
         )
 
-        await page.locator(
+        await expect(
+            document_type_locator
+        ).to_have_value(
+            document_type,
+            timeout=timeout_ms,
+        )
+
+        category_locator = page.locator(
             DocumentSelectors.CATEGORY
-        ).select_option(
+        )
+
+        await category_locator.select_option(
             value=normalized_category
+        )
+
+        await expect(
+            category_locator
+        ).to_have_value(
+            normalized_category,
+            timeout=timeout_ms,
         )
 
         await _fill_caseworker(
@@ -208,16 +417,34 @@ async def upload_document_to_case(
             timeout_ms=timeout_ms,
         )
 
-        await page.locator(
+        content_description_locator = page.locator(
             DocumentSelectors.CONTENT_DESCRIPTION
-        ).fill(
+        )
+
+        await content_description_locator.fill(
             normalized_content_description
         )
 
-        await page.locator(
+        await expect(
+            content_description_locator
+        ).to_have_value(
+            normalized_content_description,
+            timeout=timeout_ms,
+        )
+
+        public_access_locator = page.locator(
             DocumentSelectors.PUBLIC_ACCESS
-        ).select_option(
+        )
+
+        await public_access_locator.select_option(
             value=public_access
+        )
+
+        await expect(
+            public_access_locator
+        ).to_have_value(
+            public_access,
+            timeout=timeout_ms,
         )
 
         await _select_status(
@@ -243,10 +470,31 @@ async def upload_document_to_case(
             date_value=normalized_journal_date,
         )
 
+        await expect(
+            page.locator(
+                DocumentSelectors.DOCUMENT_DATE
+            )
+        ).to_have_value(
+            normalized_document_date,
+            timeout=timeout_ms,
+        )
+
+        await expect(
+            page.locator(
+                DocumentSelectors.JOURNAL_DATE
+            )
+        ).to_have_value(
+            normalized_journal_date,
+            timeout=timeout_ms,
+        )
+
         await _take_screenshot_safely(
             session=session,
             page=page,
-            name="ACADRE_DOKUMENT_STEP_3_formular_udfyldt",
+            name=(
+                "ACADRE_DOKUMENT_STEP_3_"
+                "formular_udfyldt"
+            ),
         )
 
         logger.info(
@@ -262,49 +510,53 @@ async def upload_document_to_case(
         await expect(
             save_button
         ).to_be_visible(
-            timeout=timeout_ms
+            timeout=timeout_ms,
         )
 
         await expect(
             save_button
         ).to_be_enabled(
-            timeout=timeout_ms
+            timeout=timeout_ms,
         )
 
         await _take_screenshot_safely(
             session=session,
             page=page,
-            name="ACADRE_DOKUMENT_STEP_4_foer_gem",
+            name=(
+                "ACADRE_DOKUMENT_STEP_4_"
+                "foer_gem"
+            ),
+            always=True,
         )
 
         try:
             await save_button.click()
 
             logger.info(
-                "Gem er aktiveret. Venter 3 sekunder på Acadre."
-            )
-
-            await page.wait_for_timeout(3_000)
-
-            logger.info(
-                "URL efter Gem og ventetid: %s",
-                page.url,
+                "Gem er aktiveret. Venter på Acadres "
+                "dokumentdetaljeside."
             )
 
             await page.wait_for_url(
                 "**/Frontend/CM/MainDocument/Details?**",
+                wait_until="domcontentloaded",
                 timeout=timeout_ms,
             )
 
         except Exception as error:
-            validation_messages = await _get_validation_messages(
-                page
+            validation_messages = (
+                await _get_validation_messages(
+                    page
+                )
             )
 
             await _take_screenshot_safely(
                 session=session,
                 page=page,
-                name="ACADRE_DOKUMENT_FEJL_efter_gem",
+                name=(
+                    "ACADRE_DOKUMENT_FEJL_"
+                    "efter_gem"
+                ),
                 always=True,
             )
 
@@ -312,14 +564,19 @@ async def upload_document_to_case(
                 "Dokumentet blev ikke viderestillet til Acadre "
                 "MainDocument/Details efter Gem.\n"
                 f"Aktuel URL: {page.url}\n"
-                f"Synlige valideringsbeskeder: "
+                "Kontrollér især screenshot "
+                "'ACADRE_DOKUMENT_STEP_4_foer_gem'.\n"
+                "Synlige validerings- og advarselsbeskeder: "
                 f"{validation_messages}"
             ) from error
 
         await _take_screenshot_safely(
             session=session,
             page=page,
-            name="ACADRE_DOKUMENT_STEP_5_detaljeside_aabnet",
+            name=(
+                "ACADRE_DOKUMENT_STEP_5_"
+                "detaljeside_aabnet"
+            ),
         )
 
         success_strip = page.locator(
@@ -341,8 +598,10 @@ async def upload_document_to_case(
             timeout=timeout_ms,
         )
 
-        success_message_locator = success_strip.locator(
-            ".strip__content"
+        success_message_locator = (
+            success_strip.locator(
+                ".strip__content"
+            )
         )
 
         await expect(
@@ -363,7 +622,10 @@ async def upload_document_to_case(
         await _take_screenshot_safely(
             session=session,
             page=page,
-            name="ACADRE_DOKUMENT_STEP_6_dokument_oprettet",
+            name=(
+                "ACADRE_DOKUMENT_STEP_6_"
+                "dokument_oprettet"
+            ),
         )
 
         logger.info(
@@ -376,18 +638,28 @@ async def upload_document_to_case(
             "document_id": document_id,
             "document_url": page.url,
             "success_message": success_message,
-            "file_path": str(resolved_file_path),
+            "file_path": str(
+                resolved_file_path
+            ),
         }
 
     except Exception:
         await _take_screenshot_safely(
             session=session,
             page=page,
-            name="ACADRE_DOKUMENT_FEJL_upload_flow",
+            name=(
+                "ACADRE_DOKUMENT_FEJL_"
+                "upload_flow"
+            ),
             always=True,
         )
 
         raise
+
+
+# ============================================================
+# SLUT: upload_document_to_case
+# ============================================================
 
 # ============================================================
 # START: _fill_caseworker
