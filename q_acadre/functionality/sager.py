@@ -157,6 +157,321 @@ async def case_search(
         operation_name="Acadre case_search",
     )
 
+# ============================================================
+# START: search_case_by_number
+# ============================================================
+
+async def search_case_by_number(
+    page: Page,
+    case_number: str,
+    page_size: int = 20,
+    page_index: int = 0,
+    timeout_ms: int = 120_000,
+) -> dict[str, Any]:
+    """
+    Søger efter et konkret sagsnummer via Acadres API.
+
+    API-kald:
+        POST /Frontend/CM/Case/GetGridContextData
+
+    Browserfanen navigeres ikke. Kaldet foretages gennem den
+    eksisterende Playwright BrowserContext, så Acadre-cookies
+    genbruges automatisk.
+
+    Args:
+        page:
+            Den aktive Acadre-side fra launch_acadre().
+        case_number:
+            Sagsnummeret, eksempelvis "26/20909".
+        page_size:
+            Antal søgeresultater, Acadre må returnere.
+        page_index:
+            Indeks på resultatsiden. Første side er 0.
+        timeout_ms:
+            Maksimal ventetid på API-kaldet.
+
+    Returns:
+        Dictionary med:
+
+        {
+            "case_number": "26/20909",
+            "items": [
+                {
+                    "case_id": "761237",
+                    "type": "Case",
+                    "case_url": "...",
+                    "case_number": "26/20909",
+                    "case_type": "EJSAG",
+                    "description": "...",
+                    "status": "B - Under behandling",
+                    "title": "...",
+                    "values": {...},
+                    "raw_item": {...},
+                    "is_exact_match": True,
+                }
+            ],
+            "exact_matches": [...],
+            "result_count": 1,
+            "exact_match_count": 1,
+            "page_size": 20,
+            "page_index": 0,
+            "raw_response": {...},
+        }
+    """
+    if not isinstance(case_number, str):
+        raise TypeError(
+            "case_number skal være en tekststreng."
+        )
+
+    normalized_case_number = case_number.strip()
+
+    if not normalized_case_number:
+        raise ValueError(
+            "case_number må ikke være tom."
+        )
+
+    if (
+        isinstance(page_size, bool)
+        or not isinstance(page_size, int)
+    ):
+        raise TypeError(
+            "page_size skal være et helt tal."
+        )
+
+    if page_size < 1:
+        raise ValueError(
+            "page_size skal være mindst 1."
+        )
+
+    if (
+        isinstance(page_index, bool)
+        or not isinstance(page_index, int)
+    ):
+        raise TypeError(
+            "page_index skal være et helt tal."
+        )
+
+    if page_index < 0:
+        raise ValueError(
+            "page_index må ikke være negativ."
+        )
+
+    if (
+        isinstance(timeout_ms, bool)
+        or not isinstance(timeout_ms, int)
+    ):
+        raise TypeError(
+            "timeout_ms skal være et helt tal."
+        )
+
+    if timeout_ms < 1:
+        raise ValueError(
+            "timeout_ms skal være mindst 1."
+        )
+
+    request_payload = {
+        "Identifier": "SearchCases",
+        "PageSize": page_size,
+        "PageIndex": page_index,
+        "SortingColumns": [
+            {
+                "ColumnKey": (
+                    "case-last-modification-date"
+                ),
+                "Direction": "desc",
+            }
+        ],
+        "IsFullSearch": False,
+        "CaseType": "",
+        "FilterKey": normalized_case_number,
+        "ResponsibleUnit": "",
+    }
+
+    referer = (
+        f"{ACADRE_CASE_URL}"
+        f"?IsFullSearch=False"
+        f"&SearchKey={quote(normalized_case_number)}"
+    )
+
+    print()
+    print(
+        "Søger efter Acadre-sag via API: "
+        f"{normalized_case_number}"
+    )
+
+    response = await page.context.request.post(
+        ACADRE_GRID_API_URL,
+        headers={
+            "Accept": (
+                "application/json, text/javascript, "
+                "*/*; q=0.01"
+            ),
+            "Content-Type": (
+                "application/json; charset=UTF-8"
+            ),
+            "Origin": ACADRE_BASE_URL,
+            "Referer": referer,
+            "X-Requested-With": "XMLHttpRequest",
+        },
+        data=request_payload,
+        timeout=timeout_ms,
+    )
+
+    response_data = await _read_json_response(
+        response=response,
+        operation_name=(
+            "Acadre-søgning efter sagsnummer "
+            f"'{normalized_case_number}'"
+        ),
+    )
+
+    raw_items = _extract_items(
+        response_data
+    )
+
+    normalized_items: list[dict[str, Any]] = []
+
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+
+        values_by_key: dict[str, Any] = {}
+        links_by_key: dict[str, str] = {}
+
+        raw_values = raw_item.get(
+            "Values",
+            [],
+        )
+
+        if isinstance(raw_values, list):
+            for value_item in raw_values:
+                if not isinstance(value_item, dict):
+                    continue
+
+                key = value_item.get("Key")
+
+                if not isinstance(key, str):
+                    continue
+
+                normalized_key = key.strip()
+
+                if not normalized_key:
+                    continue
+
+                values_by_key[normalized_key] = (
+                    value_item.get("Value")
+                )
+
+                link = value_item.get("Link")
+
+                if (
+                    isinstance(link, str)
+                    and link.strip()
+                ):
+                    links_by_key[normalized_key] = (
+                        link.strip()
+                    )
+
+        returned_case_number = values_by_key.get(
+            "case-sequence-number"
+        )
+
+        relative_case_url = links_by_key.get(
+            "case-sequence-number"
+        )
+
+        if not relative_case_url:
+            relative_case_url = links_by_key.get(
+                "case-icon"
+            )
+
+        case_url = None
+
+        if relative_case_url:
+            if relative_case_url.startswith(
+                ("http://", "https://")
+            ):
+                case_url = relative_case_url
+            else:
+                case_url = (
+                    f"{ACADRE_BASE_URL}"
+                    f"{relative_case_url}"
+                )
+
+        raw_case_id = raw_item.get("Id")
+
+        case_id = (
+            str(raw_case_id).strip()
+            if raw_case_id is not None
+            else None
+        )
+
+        is_exact_match = (
+            isinstance(returned_case_number, str)
+            and returned_case_number.strip().casefold()
+            == normalized_case_number.casefold()
+        )
+
+        normalized_item = {
+            "case_id": case_id,
+            "type": raw_item.get("Type"),
+            "case_url": case_url,
+            "case_number": returned_case_number,
+            "case_type": values_by_key.get(
+                "case-type"
+            ),
+            "description": values_by_key.get(
+                "case-description"
+            ),
+            "status": values_by_key.get(
+                "case-status"
+            ),
+            "title": values_by_key.get(
+                "case-title-text"
+            ),
+            "values": values_by_key,
+            "links": links_by_key,
+            "is_exact_match": is_exact_match,
+            "raw_item": raw_item,
+        }
+
+        normalized_items.append(
+            normalized_item
+        )
+
+    exact_matches = [
+        item
+        for item in normalized_items
+        if item["is_exact_match"]
+    ]
+
+    print(
+        f"HTTP-status fra Acadre: {response.status}"
+    )
+    print(
+        f"Antal søgeresultater: "
+        f"{len(normalized_items)}"
+    )
+    print(
+        f"Antal præcise matches: "
+        f"{len(exact_matches)}"
+    )
+
+    return {
+        "case_number": normalized_case_number,
+        "items": normalized_items,
+        "exact_matches": exact_matches,
+        "result_count": len(normalized_items),
+        "exact_match_count": len(exact_matches),
+        "page_size": page_size,
+        "page_index": page_index,
+        "raw_response": response_data,
+    }
+
+
+# ============================================================
+# SLUT: search_case_by_number
+# ============================================================
 
 async def case_search_full(
     page: Page,
