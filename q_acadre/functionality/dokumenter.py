@@ -389,21 +389,64 @@ async def upload_document_to_case(
 
         raise
 
+# ============================================================
+# START: _fill_caseworker
+# ============================================================
+
 async def _fill_caseworker(
     page: Page,
     caseworker: str,
     timeout_ms: int,
 ) -> None:
-    """Udfylder typeahead-feltet og vælger første forslag."""
-    locator = page.locator(DocumentSelectors.CASEWORKER)
-    await expect(locator).to_be_visible(timeout=timeout_ms)
+    """
+    Udfylder Acadre-sagsbehandleren og bekræfter med Tab.
 
-    current_value = (await locator.input_value()).strip()
+    Den forventede værdi er eksempelvis:
+        dimkro - Marianne Kryger Olsen
 
-    if current_value == caseworker:
+    Acadre viser en typeahead-forslagsliste efter indtastning.
+    Tab bruges til at acceptere det aktive forslag og flytte
+    fokus videre til næste felt.
+    """
+    normalized_caseworker = _normalize_required_value(
+        caseworker,
+        "caseworker",
+    )
+
+    locator = page.locator(
+        DocumentSelectors.CASEWORKER
+    )
+
+    await expect(
+        locator
+    ).to_be_visible(
+        timeout=timeout_ms
+    )
+
+    await expect(
+        locator
+    ).to_be_enabled(
+        timeout=timeout_ms
+    )
+
+    current_value = (
+        await locator.input_value()
+    ).strip()
+
+    if current_value == normalized_caseworker:
+        await locator.press("Tab")
         return
 
-    await locator.fill(caseworker)
+    logger.info(
+        "Udfylder Acadre-sagsbehandler med '%s'.",
+        normalized_caseworker,
+    )
+
+    await locator.fill("")
+
+    await locator.fill(
+        normalized_caseworker
+    )
 
     suggestions = page.locator(
         ".tt-menu:visible .tt-suggestion, "
@@ -411,16 +454,79 @@ async def _fill_caseworker(
     )
 
     try:
-        await expect(suggestions.first).to_be_visible(
-            timeout=5_000
+        await expect(
+            suggestions.first
+        ).to_be_visible(
+            timeout=min(
+                timeout_ms,
+                10_000,
+            )
         )
-        await suggestions.first.click()
     except Exception as error:
         raise RuntimeError(
-            f"Sagsbehandleren '{caseworker}' kunne ikke vælges "
-            "fra Acadre-forslagslisten."
+            "Acadre viste ikke et sagsbehandlerforslag for "
+            f"'{normalized_caseworker}'."
         ) from error
 
+    suggestion_texts = [
+        " ".join(text.split())
+        for text in await suggestions.all_inner_texts()
+        if " ".join(text.split())
+    ]
+
+    normalized_expected = (
+        normalized_caseworker.casefold()
+    )
+
+    exact_suggestions = [
+        suggestion_text
+        for suggestion_text in suggestion_texts
+        if suggestion_text.casefold()
+        == normalized_expected
+    ]
+
+    if not exact_suggestions:
+        raise RuntimeError(
+            "Acadre viste forslag til sagsbehandleren, men "
+            "ingen forslag matchede den forventede værdi præcist.\n"
+            f"Forventet: {normalized_caseworker!r}\n"
+            f"Forslag: {suggestion_texts}"
+        )
+
+    await locator.press("Tab")
+
+    # Giver typeahead-komponenten mulighed for at registrere Tab.
+    await page.wait_for_timeout(500)
+
+    selected_value = (
+        await locator.input_value()
+    ).strip()
+
+    if not selected_value:
+        raise RuntimeError(
+            "Sagsbehandlerfeltet blev tomt efter Tab."
+        )
+
+    if (
+        selected_value.casefold()
+        != normalized_expected
+    ):
+        raise RuntimeError(
+            "Acadre-sagsbehandlerfeltet har en uventet værdi "
+            "efter Tab.\n"
+            f"Forventet: {normalized_caseworker!r}\n"
+            f"Fundet: {selected_value!r}"
+        )
+
+    logger.info(
+        "Acadre-sagsbehandleren blev valgt med Tab: '%s'.",
+        selected_value,
+    )
+
+
+# ============================================================
+# SLUT: _fill_caseworker
+# ============================================================
 
 async def _select_status(
     page: Page,
