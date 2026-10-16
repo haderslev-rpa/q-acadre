@@ -79,51 +79,51 @@ async def _select_import_file_mode(
     timeout_ms: int,
 ) -> None:
     """
-    Vælger radioknappen "Importer fil" på Acadre-formularen.
+    Vælger Acadres radioknap "Importer fil".
 
-    Funktionen finder radioknappen ud fra den synlige tekst i stedet
-    for et dynamisk Acadre-id.
+    Acadre eksponerer radioknappen med det tilgængelige navn
+    "Importer fil:".
 
     Output:
         None.
 
     Fejl:
-        RuntimeError, hvis valgmuligheden ikke findes, hvis der findes
-        flere kandidater, eller hvis radioknappen ikke bliver valgt.
+        RuntimeError, hvis radioknappen ikke findes entydigt
+        eller ikke kan vælges.
     """
-    import_text = page.get_by_text(
-        "Importer fil",
+    import_radio = page.get_by_role(
+        "radio",
+        name="Importer fil:",
         exact=True,
     )
 
-    await expect(
-        import_text
-    ).to_be_visible(
-        timeout=timeout_ms,
-    )
-
-    import_container = import_text.locator(
-        "xpath=ancestor::*[.//input[@type='radio']][1]"
-    )
-
-    radio = import_container.locator(
-        'input[type="radio"]'
-    )
-
-    radio_count = await radio.count()
+    radio_count = await import_radio.count()
 
     if radio_count != 1:
-        raise RuntimeError(
-            "Kunne ikke identificere præcis én radioknap "
-            "til 'Importer fil'. "
-            f"Antal fundne radioknapper: {radio_count}."
+        radio_data = await page.locator(
+            'input[type="radio"]'
+        ).evaluate_all(
+            """
+            elements => elements.map(element => ({
+                id: element.id || "",
+                name: element.name || "",
+                value: element.value || "",
+                checked: element.checked,
+                outerHTML: element.outerHTML
+            }))
+            """
         )
 
-    import_radio = radio.first
+        raise RuntimeError(
+            "Kunne ikke identificere præcis én radioknap "
+            "med navnet 'Importer fil:'.\n"
+            f"Antal matches: {radio_count}\n"
+            f"Radioknapper på siden: {radio_data}"
+        )
 
     await expect(
         import_radio
-    ).to_be_attached(
+    ).to_be_visible(
         timeout=timeout_ms,
     )
 
@@ -134,15 +134,30 @@ async def _select_import_file_mode(
     )
 
     if not await import_radio.is_checked():
-        await import_radio.check(
-            force=True,
+        logger.info(
+            "Vælger Acadre-radioknappen 'Importer fil'."
         )
+
+        await import_radio.check()
 
     await expect(
         import_radio
     ).to_be_checked(
         timeout=timeout_ms,
     )
+
+    start_program_radio = page.get_by_role(
+        "radio",
+        name="Start program:",
+        exact=True,
+    )
+
+    if await start_program_radio.count() == 1:
+        await expect(
+            start_program_radio
+        ).not_to_be_checked(
+            timeout=timeout_ms,
+        )
 
     logger.info(
         "Acadre er sat til 'Importer fil'."
