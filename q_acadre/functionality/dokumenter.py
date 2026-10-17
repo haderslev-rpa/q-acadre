@@ -813,6 +813,240 @@ async def upload_document_to_case(
 # ============================================================
 
 # ============================================================
+# START: _get_caseworker_group
+# ============================================================
+
+async def _get_caseworker_group(
+    page: Page,
+    timeout_ms: int,
+):
+    """Finder formulargruppen omkring Acadres Sagsbehandler-felt."""
+    locator = page.locator(
+        DocumentSelectors.CASEWORKER
+    )
+
+    await expect(
+        locator
+    ).to_be_visible(
+        timeout=timeout_ms,
+    )
+
+    group = locator.locator(
+        "xpath=ancestor::*[contains("
+        "concat(' ', normalize-space(@class), ' '), "
+        "' form-group '"
+        ")][1]"
+    )
+
+    group_count = await group.count()
+
+    if group_count != 1:
+        raise RuntimeError(
+            "Kunne ikke finde præcis én formulargruppe omkring "
+            "Acadres Sagsbehandler-felt. "
+            f"Antal matches: {group_count}."
+        )
+
+    return group
+
+
+# ============================================================
+# SLUT: _get_caseworker_group
+# ============================================================
+
+
+# ============================================================
+# START: _clear_existing_caseworker
+# ============================================================
+
+async def _clear_existing_caseworker(
+    page: Page,
+    timeout_ms: int,
+) -> None:
+    """
+    Fjerner en eksisterende valgt sagsbehandler via X-knappen.
+
+    Acadre kan placere det synlige tt-input oven på dele af X-knappen.
+    Derfor forsøges først et kort normalt klik, derefter force-click og
+    til sidst element.click() direkte i DOM'en.
+    """
+    locator = page.locator(
+        DocumentSelectors.CASEWORKER
+    )
+
+    await expect(
+        locator
+    ).to_be_visible(
+        timeout=timeout_ms,
+    )
+
+    await expect(
+        locator
+    ).to_be_enabled(
+        timeout=timeout_ms,
+    )
+
+    group = await _get_caseworker_group(
+        page=page,
+        timeout_ms=timeout_ms,
+    )
+
+    await group.scroll_into_view_if_needed()
+    await page.wait_for_timeout(500)
+
+    current_value = (
+        await locator.input_value()
+    ).strip()
+
+    clear_buttons = group.locator(
+        "button.js-lookup-clear:visible"
+    )
+
+    clear_button_count = await clear_buttons.count()
+
+    if clear_button_count == 0:
+        clear_buttons = group.get_by_role(
+            "button",
+            name="X",
+            exact=True,
+        )
+        clear_button_count = await clear_buttons.count()
+
+    if clear_button_count > 1:
+        button_data = await group.locator(
+            "button"
+        ).evaluate_all(
+            """
+            elements => elements.map(element => ({
+                text: (element.innerText || "").trim(),
+                className: element.className || "",
+                visible: Boolean(
+                    element.offsetWidth || element.offsetHeight
+                ),
+                outerHTML: element.outerHTML
+            }))
+            """
+        )
+
+        raise RuntimeError(
+            "Der blev fundet flere mulige ryd-knapper i "
+            "Sagsbehandler-feltet.\n"
+            f"Antal matches: {clear_button_count}\n"
+            f"Knapper: {button_data}"
+        )
+
+    if clear_button_count == 1:
+        clear_button = clear_buttons.first
+
+        await expect(
+            clear_button
+        ).to_be_visible(
+            timeout=timeout_ms,
+        )
+
+        await expect(
+            clear_button
+        ).to_be_enabled(
+            timeout=timeout_ms,
+        )
+
+        click_succeeded = False
+
+        try:
+            await clear_button.click(
+                timeout=min(timeout_ms, 3_000),
+            )
+            click_succeeded = True
+        except Exception as normal_click_error:
+            logger.info(
+                "Normalt klik på sagsbehandlerens X-knap blev "
+                "blokeret: %s. Forsøger force-click.",
+                normal_click_error,
+            )
+
+        if not click_succeeded:
+            try:
+                await clear_button.click(
+                    force=True,
+                    timeout=min(timeout_ms, 3_000),
+                )
+                click_succeeded = True
+            except Exception as force_click_error:
+                logger.info(
+                    "Force-click på sagsbehandlerens X-knap "
+                    "mislykkedes: %s. Forsøger DOM-click.",
+                    force_click_error,
+                )
+
+        if not click_succeeded:
+            clear_button = group.locator(
+                "button.js-lookup-clear"
+            ).first
+
+            if await clear_button.count() == 1:
+                await clear_button.evaluate(
+                    "element => element.click()"
+                )
+                click_succeeded = True
+
+        if not click_succeeded:
+            raise RuntimeError(
+                "Sagsbehandlerens X-knap kunne ikke aktiveres."
+            )
+
+        await page.wait_for_timeout(2_000)
+
+    # Ryd eventuel tekst, som stadig står i Twitter-Typeahead-inputtet.
+    await locator.click(
+        force=True,
+    )
+    await page.wait_for_timeout(300)
+
+    await page.keyboard.press(
+        "Control+A"
+    )
+    await page.wait_for_timeout(200)
+
+    await page.keyboard.press(
+        "Backspace"
+    )
+    await page.wait_for_timeout(500)
+
+    remaining_value = (
+        await locator.input_value()
+    ).strip()
+
+    if remaining_value:
+        await locator.fill("")
+        await page.wait_for_timeout(500)
+
+    final_value = (
+        await locator.input_value()
+    ).strip()
+
+    if final_value:
+        group_html = await group.evaluate(
+            "element => element.outerHTML"
+        )
+
+        raise RuntimeError(
+            "Den eksisterende sagsbehandler kunne ikke ryddes.\n"
+            f"Værdi før rydning: {current_value!r}\n"
+            f"Værdi efter rydning: {final_value!r}\n"
+            f"Sagsbehandlergruppens HTML:\n{group_html}"
+        )
+
+    logger.info(
+        "Eksisterende Acadre-sagsbehandler er fjernet."
+    )
+
+
+# ============================================================
+# SLUT: _clear_existing_caseworker
+# ============================================================
+
+
+# ============================================================
 # START: _fill_caseworker
 # ============================================================
 
@@ -822,10 +1056,12 @@ async def _fill_caseworker(
     timeout_ms: int,
 ) -> None:
     """
-    Udfylder Acadre-sagsbehandleren og bekræfter med Tab.
+    Udfylder Acadre-sagsbehandleren efter det afprøvede flow.
 
-    Den forventede værdi er eksempelvis:
-        dimkro - Marianne Kryger Olsen
+    Flowet fjerner den eksisterende værdi, venter, dobbeltklikker i
+    feltet, hover to gange, dobbeltklikker igen, sender værdien som
+    tastaturhændelser og trykker Tab tre gange. Valideringen gentages
+    højst fem gange.
     """
     normalized_caseworker = _normalize_required_value(
         caseworker,
@@ -835,105 +1071,203 @@ async def _fill_caseworker(
     locator = page.locator(
         DocumentSelectors.CASEWORKER
     )
+
     await expect(
         locator
     ).to_be_visible(
-        timeout=timeout_ms
+        timeout=timeout_ms,
     )
+
     await expect(
         locator
     ).to_be_enabled(
-        timeout=timeout_ms
+        timeout=timeout_ms,
     )
 
     current_value = (
         await locator.input_value()
     ).strip()
 
-    if current_value == normalized_caseworker:
-        await locator.press("Tab")
+    if (
+        current_value.casefold()
+        == normalized_caseworker.casefold()
+    ):
+        logger.info(
+            "Den ønskede sagsbehandler er allerede udfyldt: '%s'.",
+            normalized_caseworker,
+        )
         return
 
-    logger.info(
-        "Udfylder Acadre-sagsbehandler med '%s'.",
-        normalized_caseworker,
-    )
+    maximum_attempts = 5
+    attempt_results: list[dict[str, Any]] = []
 
-    await locator.fill("")
-    await locator.fill(
-        normalized_caseworker
-    )
-
-    suggestions = page.locator(
-        ".tt-menu:visible .tt-suggestion, "
-        ".typeahead.dropdown-menu:visible li"
-    )
-
-    try:
-        await expect(
-            suggestions.first
-        ).to_be_visible(
-            timeout=min(
-                timeout_ms,
-                10_000,
-            )
-        )
-    except Exception as error:
-        raise RuntimeError(
-            "Acadre viste ikke et sagsbehandlerforslag for "
-            f"'{normalized_caseworker}'."
-        ) from error
-
-    suggestion_texts = [
-        " ".join(text.split())
-        for text in await suggestions.all_inner_texts()
-        if " ".join(text.split())
-    ]
-
-    normalized_expected = (
-        normalized_caseworker.casefold()
-    )
-    exact_suggestions = [
-        suggestion_text
-        for suggestion_text in suggestion_texts
-        if suggestion_text.casefold()
-        == normalized_expected
-    ]
-
-    if not exact_suggestions:
-        raise RuntimeError(
-            "Acadre viste forslag til sagsbehandleren, men "
-            "ingen forslag matchede den forventede værdi præcist.\n"
-            f"Forventet: {normalized_caseworker!r}\n"
-            f"Forslag: {suggestion_texts}"
-        )
-
-    await locator.press("Tab")
-    await page.wait_for_timeout(500)
-
-    selected_value = (
-        await locator.input_value()
-    ).strip()
-
-    if not selected_value:
-        raise RuntimeError(
-            "Sagsbehandlerfeltet blev tomt efter Tab."
-        )
-
-    if (
-        selected_value.casefold()
-        != normalized_expected
+    for attempt_number in range(
+        1,
+        maximum_attempts + 1,
     ):
-        raise RuntimeError(
-            "Acadre-sagsbehandlerfeltet har en uventet værdi "
-            "efter Tab.\n"
-            f"Forventet: {normalized_caseworker!r}\n"
-            f"Fundet: {selected_value!r}"
+        logger.info(
+            "Udfylder Acadre-sagsbehandler med '%s' "
+            "(forsøg %s/%s).",
+            normalized_caseworker,
+            attempt_number,
+            maximum_attempts,
         )
 
-    logger.info(
-        "Acadre-sagsbehandleren blev valgt med Tab: '%s'.",
-        selected_value,
+        await _clear_existing_caseworker(
+            page=page,
+            timeout_ms=timeout_ms,
+        )
+
+        # Samme pause som i det fungerende Blue Prism-flow.
+        await page.wait_for_timeout(2_000)
+
+        await locator.scroll_into_view_if_needed()
+
+        await locator.dblclick(
+            delay=100,
+        )
+        await page.wait_for_timeout(500)
+
+        await locator.hover()
+        await page.wait_for_timeout(500)
+
+        await locator.hover()
+        await page.wait_for_timeout(200)
+
+        await locator.dblclick(
+            delay=100,
+        )
+        await page.wait_for_timeout(200)
+
+        await expect(
+            locator
+        ).to_be_focused(
+            timeout=timeout_ms,
+        )
+
+        await page.keyboard.press(
+            "Control+A"
+        )
+        await page.wait_for_timeout(200)
+
+        await page.keyboard.press(
+            "Backspace"
+        )
+        await page.wait_for_timeout(500)
+
+        if (
+            await locator.input_value()
+        ).strip():
+            await locator.fill("")
+            await page.wait_for_timeout(500)
+
+        await locator.dblclick(
+            delay=100,
+        )
+        await page.wait_for_timeout(500)
+
+        await expect(
+            locator
+        ).to_be_focused(
+            timeout=timeout_ms,
+        )
+
+        # SendKeyEvents svarer bedst til browserens keyboard.type().
+        await page.keyboard.type(
+            normalized_caseworker,
+            delay=100,
+        )
+
+        await expect(
+            locator
+        ).to_have_value(
+            normalized_caseworker,
+            timeout=timeout_ms,
+        )
+
+        await page.wait_for_timeout(1_000)
+
+        for _ in range(3):
+            await page.keyboard.press(
+                "Tab"
+            )
+            await page.wait_for_timeout(200)
+
+        await page.wait_for_timeout(1_000)
+
+        group = await _get_caseworker_group(
+            page=page,
+            timeout_ms=timeout_ms,
+        )
+
+        group_text = " ".join(
+            (
+                await group.inner_text()
+            ).split()
+        )
+
+        input_value = " ".join(
+            (
+                await locator.input_value()
+            ).split()
+        )
+
+        validation_text = " ".join(
+            value
+            for value in (
+                group_text,
+                input_value,
+            )
+            if value
+        )
+
+        matched = (
+            normalized_caseworker.casefold()
+            in validation_text.casefold()
+        )
+
+        attempt_results.append(
+            {
+                "attempt": attempt_number,
+                "group_text": group_text,
+                "input_value": input_value,
+                "matched": matched,
+            }
+        )
+
+        if matched:
+            logger.info(
+                "Acadre-sagsbehandleren blev valideret: '%s'.",
+                normalized_caseworker,
+            )
+            return
+
+        logger.warning(
+            "Sagsbehandleren kunne ikke valideres på forsøg %s. "
+            "Forventet=%r, fundet=%r.",
+            attempt_number,
+            normalized_caseworker,
+            validation_text,
+        )
+
+        if attempt_number < maximum_attempts:
+            await page.wait_for_timeout(1_000)
+
+    final_group = await _get_caseworker_group(
+        page=page,
+        timeout_ms=timeout_ms,
+    )
+
+    final_group_html = await final_group.evaluate(
+        "element => element.outerHTML"
+    )
+
+    raise RuntimeError(
+        "Kunne ikke validere Acadre-sagsbehandleren efter "
+        f"{maximum_attempts} forsøg.\n"
+        f"Forventet: {normalized_caseworker!r}\n"
+        f"Forsøg: {attempt_results}\n"
+        f"Sagsbehandlergruppens HTML:\n{final_group_html}"
     )
 
 
