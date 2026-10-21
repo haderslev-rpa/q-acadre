@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "automation-server-client",
-    "playwright>=1.62.0",
+    "playwright>=1.59.0",
     "q-haderslev-vbo",
     "requests>=2.31.0",
 ]

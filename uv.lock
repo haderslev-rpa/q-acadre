@@ -458,7 +458,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "automation-server-client", git = "https://github.com/odense-rpa/automation-server-client.git?tag=v0.3.0" },
-    { name = "playwright", specifier = ">=1.62.0" },
+    { name = "playwright", specifier = ">=1.59.0" },
     { name = "q-haderslev-vbo", git = "https://github.com/haderslev-rpa/q-haderslev-vbo.git?branch=main" },
     { name = "requests", specifier = ">=2.31.0" },
 ]
