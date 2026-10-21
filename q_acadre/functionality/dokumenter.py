@@ -1,4 +1,5 @@
 import logging
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
@@ -242,6 +243,115 @@ async def _wait_for_visible_uploaded_file(
 # SLUT: _wait_for_visible_uploaded_file
 # ============================================================
 
+
+# ============================================================
+# START: _haandter_post_commit_statusdialog
+# ============================================================
+
+async def _haandter_post_commit_statusdialog(
+    page: Page,
+    session,
+    timeout_ms: int,
+) -> None:
+    """
+    Håndterer Acadres valgfrie statusdialog efter Gem.
+
+    Hvis Acadre spørger, om sagens status skal ændres til B, vælges
+    altid "Nej", så dokumentimporten ikke ændrer sagens status.
+
+    Output:
+        Funktionen returnerer, når dokumentets Details-side er åbnet.
+    """
+    await page.wait_for_url(
+        re.compile(
+            r"/Frontend/CM/MainDocument/"
+            r"(?:Details|ShowPostCommitAction)"
+        ),
+        wait_until="domcontentloaded",
+        timeout=timeout_ms,
+    )
+
+    current_url = str(page.url or "").strip()
+
+    if "/Frontend/CM/MainDocument/Details" in current_url:
+        return
+
+    if (
+        "/Frontend/CM/MainDocument/ShowPostCommitAction"
+        not in current_url
+    ):
+        raise RuntimeError(
+            "Acadre navigerede til en uventet side efter Gem. "
+            f"Aktuel URL: {current_url}"
+        )
+
+    status_question = page.locator(
+        "p",
+        has_text="Ønsker du at ændre sagens status til B?",
+    )
+    no_button = page.locator("button#btn-no")
+
+    try:
+        await expect(status_question).to_have_count(
+            1,
+            timeout=timeout_ms,
+        )
+        await expect(status_question).to_have_text(
+            "Ønsker du at ændre sagens status til B?",
+            timeout=timeout_ms,
+        )
+        await expect(no_button).to_have_count(
+            1,
+            timeout=timeout_ms,
+        )
+        await expect(no_button).to_be_visible(
+            timeout=timeout_ms,
+        )
+        await expect(no_button).to_be_enabled(
+            timeout=timeout_ms,
+        )
+    except Exception as error:
+        visible_text = " ".join(
+            (await page.locator("body").inner_text()).split()
+        )
+        raise RuntimeError(
+            "Acadre viste ShowPostCommitAction, men den forventede "
+            "statusdialog kunne ikke valideres. "
+            f"Aktuel URL: {current_url}. "
+            f"Synlig tekst: {visible_text[:1_000]}"
+        ) from error
+
+    logger.info(
+        "Acadre spørger, om sagens status skal ændres til B. "
+        "Vælger 'Nej', så sagens status bevares."
+    )
+
+    await _take_screenshot_safely(
+        session=session,
+        page=page,
+        name=(
+            "ACADRE_DOKUMENT_STEP_5_"
+            "statusdialog_foer_nej"
+        ),
+        always=True,
+    )
+
+    await no_button.click()
+
+    await page.wait_for_url(
+        "**/Frontend/CM/MainDocument/Details?**",
+        wait_until="domcontentloaded",
+        timeout=timeout_ms,
+    )
+
+    logger.info(
+        "Acadres statusændring blev afvist. "
+        "Dokumentdetaljesiden er åbnet."
+    )
+
+# ============================================================
+# SLUT: _haandter_post_commit_statusdialog
+# ============================================================
 
 # ============================================================
 # START: upload_document_to_case
@@ -682,13 +792,13 @@ async def upload_document_to_case(
 
             logger.info(
                 "Gem er aktiveret. Venter på Acadres "
-                "dokumentdetaljeside."
+                "dokumentdetaljeside eller statusdialog."
             )
 
-            await page.wait_for_url(
-                "**/Frontend/CM/MainDocument/Details?**",
-                wait_until="domcontentloaded",
-                timeout=timeout_ms,
+            await _haandter_post_commit_statusdialog(
+                page=page,
+                session=session,
+                timeout_ms=timeout_ms,
             )
 
         except Exception as error:
@@ -713,7 +823,7 @@ async def upload_document_to_case(
                 "MainDocument/Details efter Gem.\n"
                 f"Aktuel URL: {page.url}\n"
                 "Kontrollér screenshot "
-                "'ACADRE_DOKUMENT_STEP_4_foer_gem'.\n"
+                "'ACADRE_DOKUMENT_FEJL_efter_gem'.\n"
                 "Synlige validerings- og advarselsbeskeder: "
                 f"{validation_messages}"
             ) from error
