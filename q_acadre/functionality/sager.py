@@ -2088,3 +2088,597 @@ def _extract_case_id(
                     return nested_case_id
 
     return None
+
+    # ============================================================
+# START: create_case_via_api
+# ============================================================
+async def create_case_via_api(
+    page: Page,
+    title: str,
+    case_type: str,
+    note: str,
+    case_content: str,
+    case_date: str,
+    subject_code: str,
+    facet_code: str,
+    responsible_employee_id: str | int,
+    responsible_unit_id: str | int,
+    *,
+    case_status: str = "B",
+    public_access_value: str = "3",
+    principle_case: bool = False,
+    retention_code: str = "B",
+    deletion_code: str = "P1825D",
+    public_access_case: bool = False,
+    timeout_ms: int = 120_000,
+) -> dict[str, Any]:
+    """
+    Opretter en Acadre-sag via HTTP.
+
+    Flow:
+        1. GET Case/Create.
+        2. Læs den aktuelle entityProfileInstanceId.
+        3. Genbrug formularens skjulte felter.
+        4. Indsæt de ønskede sagsværdier.
+        5. POST Case/Create.
+        6. Hent caseId fra Location-headeren.
+
+    Browserfanen navigeres ikke. Den eksisterende Acadre-session
+    genbruges via page.context.request.
+
+    Returnerer eksempelvis:
+        {
+            "case_id": "762665",
+            "case_url": (
+                "https://udcdokwebfront.intern.udcit.dk"
+                "/Frontend/CM/Case/Details?caseId=762665"
+            ),
+            "entity_profile_instance_id": (
+                "b05457d453dc439c8cb24146e6311821"
+            ),
+            "http_status": 302,
+        }
+    """
+    from html.parser import HTMLParser
+    from urllib.parse import parse_qs, urljoin, urlparse
+
+    if page is None:
+        raise ValueError("page skal angives.")
+
+    if page.is_closed():
+        raise RuntimeError(
+            "Playwright-siden er lukket. "
+            "Acadre-sagen kan derfor ikke oprettes."
+        )
+
+    if timeout_ms < 1:
+        raise ValueError(
+            "timeout_ms skal være mindst 1."
+        )
+
+    required_values = {
+        "title": title,
+        "case_type": case_type,
+        "case_content": case_content,
+        "case_date": case_date,
+        "subject_code": subject_code,
+        "facet_code": facet_code,
+        "responsible_employee_id": responsible_employee_id,
+        "responsible_unit_id": responsible_unit_id,
+    }
+
+    normalized_values: dict[str, str] = {}
+
+    for field_name, field_value in required_values.items():
+        if isinstance(field_value, bool):
+            raise ValueError(
+                f"{field_name} må ikke være en bool-værdi."
+            )
+
+        normalized_value = str(field_value).strip()
+
+        if not normalized_value:
+            raise ValueError(
+                f"{field_name} skal udfyldes."
+            )
+
+        normalized_values[field_name] = normalized_value
+
+    if not isinstance(note, str):
+        raise TypeError("note skal være tekst.")
+
+    class AcadreCreateFormParser(HTMLParser):
+        """
+        Læser formularens action og alle inputfelter med name.
+
+        Den medtager især de skjulte felter, som Acadre selv har
+        genereret i GET-svaret.
+        """
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.form_action = ""
+            self.form_depth = 0
+            self.in_create_form = False
+            self.fields: dict[str, str] = {}
+
+        def handle_starttag(
+            self,
+            tag: str,
+            attrs: list[tuple[str, str | None]],
+        ) -> None:
+            attributes = dict(attrs)
+
+            if tag.lower() == "form":
+                action = str(
+                    attributes.get("action") or ""
+                ).strip()
+
+                if "/Frontend/CM/Case/Create" in action:
+                    self.in_create_form = True
+                    self.form_depth = 1
+                    self.form_action = action
+                elif self.in_create_form:
+                    self.form_depth += 1
+
+                return
+
+            if not self.in_create_form:
+                return
+
+            if tag.lower() != "input":
+                return
+
+            field_name = str(
+                attributes.get("name") or ""
+            ).strip()
+
+            if not field_name:
+                return
+
+            field_type = str(
+                attributes.get("type") or "text"
+            ).strip().lower()
+
+            # En checkbox/radioknap uden checked bliver normalt ikke
+            # sendt af browseren.
+            if field_type in {"checkbox", "radio"}:
+                if "checked" not in attributes:
+                    return
+
+            field_value = str(
+                attributes.get("value") or ""
+            )
+
+            self.fields[field_name] = field_value
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag.lower() != "form":
+                return
+
+            if not self.in_create_form:
+                return
+
+            self.form_depth -= 1
+
+            if self.form_depth <= 0:
+                self.in_create_form = False
+                self.form_depth = 0
+
+    base_url = ACADRE_BASE_URL
+    create_page_url = (
+        f"{base_url}/Frontend/CM/Case/Create"
+    )
+
+    # --------------------------------------------------------
+    # TRIN 1: Hent en frisk Acadre-formular
+    # --------------------------------------------------------
+    create_page_response = await page.context.request.get(
+        create_page_url,
+        timeout=timeout_ms,
+    )
+
+    if not create_page_response.ok:
+        response_text = await create_page_response.text()
+
+        raise RuntimeError(
+            "Acadre-formularen kunne ikke hentes.\n"
+            f"HTTP-status: {create_page_response.status}\n"
+            f"URL: {create_page_url}\n"
+            f"Svar:\n{response_text[:3_000]}"
+        )
+
+    create_page_html = await create_page_response.text()
+
+    parser = AcadreCreateFormParser()
+    parser.feed(create_page_html)
+
+    form_data = dict(parser.fields)
+
+    entity_profile_instance_id = str(
+        form_data.get(
+            "entityProfileInstanceId",
+            "",
+        )
+    ).strip()
+
+    if not entity_profile_instance_id:
+        raise RuntimeError(
+            "GET Case/Create returnerede ikke "
+            "entityProfileInstanceId.\n"
+            "Acadres HTML-formular har muligvis ændret sig."
+        )
+
+    positioning_profile_id = str(
+        form_data.get(
+            "positioningEntityProfileInstanceId",
+            "",
+        )
+    ).strip()
+
+    if (
+        positioning_profile_id
+        and positioning_profile_id
+        != entity_profile_instance_id
+    ):
+        raise RuntimeError(
+            "Acadre returnerede forskellige profil-ID'er.\n"
+            "entityProfileInstanceId: "
+            f"{entity_profile_instance_id}\n"
+            "positioningEntityProfileInstanceId: "
+            f"{positioning_profile_id}"
+        )
+
+    def profile_field(field_id: str) -> str:
+        return (
+            f"profile_{entity_profile_instance_id}"
+            f"_field_{field_id}"
+        )
+
+    # --------------------------------------------------------
+    # TRIN 2: Overskriv/formér de ønskede sagsfelter
+    # --------------------------------------------------------
+    form_data.update(
+        {
+            "entityProfileInstanceId": (
+                entity_profile_instance_id
+            ),
+            "positioningEntityProfileInstanceId": (
+                entity_profile_instance_id
+            ),
+            "refresh": "false",
+
+            # Sagsstatus
+            profile_field(
+                "1de21e9e9a06480f845d3aaed2dfa078"
+            ): case_status.strip(),
+
+            # Titel
+            profile_field(
+                "ca88abe83c46415ca6586127a2c252f7"
+            ): normalized_values["title"],
+
+            # Sagstype
+            profile_field(
+                "821439535b1c400a9ea2d572363257ab"
+            ): normalized_values["case_type"],
+
+            # Bemærkning
+            profile_field(
+                "99a116a85a8642e1a3c083de0ec57342"
+            ): note.strip(),
+
+            # Sagsindhold
+            profile_field(
+                "ee1cc61d0bdb48459ecb9b371614c256"
+            ): normalized_values["case_content"],
+
+            # Sagsdato
+            profile_field(
+                "1e9dce31c21c4d4bb85a627520075fa9"
+            ): normalized_values["case_date"],
+
+            # Emne
+            profile_field(
+                "8f82f00aa13d4dedba31fcae4d6ced67"
+            ): (
+                '[{"principleId":"KL Koder",'
+                f'"categoryId":'
+                f'"{normalized_values["subject_code"]}"'
+                "}]"
+            ),
+
+            # Facet
+            profile_field(
+                "eecf954b9e654d5395c9c5e0c82e3945"
+            ): (
+                '[{"principleId":"Facetter",'
+                f'"categoryId":'
+                f'"{normalized_values["facet_code"]}"'
+                "}]"
+            ),
+
+            # Aktindsigt
+            profile_field(
+                "f6832745b50f4a82bb1bbfd7be0feab0"
+            ): public_access_value.strip(),
+
+            # Principsag
+            profile_field(
+                "ed962f6479044f658a642bfb78a87eda"
+            ): str(principle_case).lower(),
+
+            # Sagsansvarlig
+            profile_field(
+                "2441e634a72144b081e5fc3af2342a7f"
+            ): normalized_values[
+                "responsible_employee_id"
+            ],
+
+            # Sagsansvarlig enhed
+            profile_field(
+                "0eee4063baf3412cb7a10a3890c58bb8"
+            ): normalized_values[
+                "responsible_unit_id"
+            ],
+
+            # Bekræftelsesfelter
+            "shouldShowAttachMultiCaseConfirmation": (
+                "False"
+            ),
+            "shouldShowCreateMultiCaseConfirmation": (
+                "False"
+            ),
+            (
+                "shouldShowCreateMultiCaseConfirmation"
+                "WithPartyWarning"
+            ): "False",
+
+            # Kassationskode
+            profile_field(
+                "00217b9c8bd347c8b76299d453796b9c"
+            ): retention_code.strip(),
+
+            # Slettekode
+            profile_field(
+                "3e4da631f8f74b709b39933b170f859f"
+            ): deletion_code.strip(),
+
+            # Aktindsigtssag
+            profile_field(
+                "81cb80f253ed43b88d257bbe02a94edd"
+            ): str(public_access_case).lower(),
+        }
+    )
+
+    # Formularens action er den bedste POST-adresse, fordi Acadre
+    # selv leverer cancelUrl og eventuelle øvrige query-parametre.
+    if parser.form_action:
+        post_url = urljoin(
+            create_page_url,
+            parser.form_action,
+        )
+    else:
+        post_url = create_page_url
+
+    # --------------------------------------------------------
+    # TRIN 3: Opret sagen
+    # --------------------------------------------------------
+    create_response = await page.context.request.post(
+        post_url,
+        form=form_data,
+        headers={
+            "Referer": create_page_url,
+            "Origin": base_url,
+        },
+        max_redirects=0,
+        timeout=timeout_ms,
+    )
+
+    location = str(
+        create_response.headers.get(
+            "location",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if create_response.status not in {
+        301,
+        302,
+        303,
+        307,
+        308,
+    }:
+        response_text = await create_response.text()
+
+        raise RuntimeError(
+            "Acadre returnerede ikke et redirect efter "
+            "sagsoprettelsen.\n"
+            f"HTTP-status: {create_response.status}\n"
+            f"POST URL: {post_url}\n"
+            "Anvendt entityProfileInstanceId: "
+            f"{entity_profile_instance_id}\n"
+            f"Svar fra Acadre:\n{response_text[:5_000]}"
+        )
+
+    if not location:
+        raise RuntimeError(
+            "Acadre returnerede et redirect uden en "
+            "Location-header.\n"
+            f"HTTP-status: {create_response.status}"
+        )
+
+    case_url = urljoin(
+        base_url,
+        location,
+    )
+
+    parsed_case_url = urlparse(case_url)
+
+    case_ids = parse_qs(
+        parsed_case_url.query
+    ).get("caseId", [])
+
+    if not case_ids:
+        raise RuntimeError(
+            "Sagen ser ud til at være oprettet, men redirectet "
+            "indeholder ikke caseId.\n"
+            f"Location: {location}"
+        )
+
+    case_id = str(case_ids[0]).strip()
+
+    if not case_id:
+        raise RuntimeError(
+            "Acadre returnerede et tomt caseId.\n"
+            f"Location: {location}"
+        )
+
+    return {
+        "case_id": case_id,
+        "case_url": case_url,
+        "redirect_location": location,
+        "entity_profile_instance_id": (
+            entity_profile_instance_id
+        ),
+        "http_status": create_response.status,
+    }
+
+
+# ============================================================
+# SLUT: create_case_via_api
+# ============================================================
+
+# ============================================================
+# START: get_user_by_display_name
+# ============================================================
+
+
+# ============================================================
+# SLUT: get_user_by_display_name
+# ============================================================
+
+# ============================================================
+# START: get_user_by_display_name
+# ============================================================
+async def get_user_by_display_name(
+    page: Page,
+    display_name: str,
+    *,
+    timeout_ms: int = 120_000,
+) -> dict[str, Any]:
+    """
+    Slår en bruger op via Acadres GetUserByDisplayName.
+
+    Genbruger den eksisterende Acadre-session.
+    Opretter ikke en browser og ændrer ikke nogen sag.
+
+    Returnerer Acadres oprindelige JSON-format:
+        {
+            "id": <brugerens ID>,
+            "departmentId": <afdelingens ID>,
+            "departmentName": "<afdelingens navn>",
+        }
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    if not isinstance(display_name, str):
+        raise TypeError("display_name skal være tekst.")
+
+    normalized_display_name = display_name.strip()
+
+    if not normalized_display_name:
+        raise ValueError("display_name må ikke være tomt.")
+
+    if (
+        isinstance(timeout_ms, bool)
+        or not isinstance(timeout_ms, int)
+        or timeout_ms <= 0
+    ):
+        raise ValueError("timeout_ms skal være et positivt heltal.")
+
+    if page.is_closed():
+        raise RuntimeError("Acadre-siden er lukket.")
+
+    form_data = {
+        "IncludeUnroledUsers": "false",
+        "IncludeInactiveUsers": "false",
+        "AreDynamicOperatorsSupported": "false",
+        "SupportedEntityTypes[]": "0",
+        "displayName": normalized_display_name,
+    }
+
+    logger.info(
+        "Slår Acadre-bruger op: %s",
+        normalized_display_name,
+    )
+
+    response = await page.context.request.post(
+        f"{ACADRE_BASE_URL}/Frontend/CM/User/GetUserByDisplayName",
+        form=form_data,
+        headers={
+            "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            "Origin": ACADRE_BASE_URL,
+            "Referer": f"{ACADRE_BASE_URL}/Frontend/CM/",
+        },
+        max_redirects=0,
+        timeout=timeout_ms,
+        fail_on_status_code=False,
+    )
+
+    try:
+        logger.info(
+            "HTTP-status fra brugeropslag: %s",
+            response.status,
+        )
+
+        if not response.ok:
+            raise RuntimeError(
+                "Acadre-brugeropslaget fejlede. "
+                f"HTTP-status: {response.status}."
+            )
+
+        try:
+            result = await response.json()
+        except ValueError as error:
+            raise RuntimeError(
+                "Acadre-brugeropslaget returnerede ikke gyldig JSON."
+            ) from error
+
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                "Forventede et JSON-objekt fra Acadre."
+            )
+
+        user_id = result.get("id")
+
+        if (
+            isinstance(user_id, bool)
+            or not isinstance(user_id, (int, str))
+            or not str(user_id).isdigit()
+            or int(user_id) <= 0
+        ):
+            raise RuntimeError(
+                "Acadre returnerede ikke et gyldigt bruger-ID "
+                f"for {normalized_display_name!r}."
+            )
+
+        for key in ("departmentId", "departmentName"):
+            if key not in result:
+                raise RuntimeError(
+                    f"Acadre-svaret mangler feltet {key!r}."
+                )
+
+        return result
+
+    finally:
+        await response.dispose()
+
+
+# ============================================================
+# SLUT: get_user_by_display_name
+# ============================================================
