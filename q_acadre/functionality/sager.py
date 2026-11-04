@@ -2553,15 +2553,6 @@ async def create_case_via_api(
 # ============================================================
 # START: get_user_by_display_name
 # ============================================================
-
-
-# ============================================================
-# SLUT: get_user_by_display_name
-# ============================================================
-
-# ============================================================
-# START: get_user_by_display_name
-# ============================================================
 async def get_user_by_display_name(
     page: Page,
     display_name: str,
@@ -2681,4 +2672,306 @@ async def get_user_by_display_name(
 
 # ============================================================
 # SLUT: get_user_by_display_name
+# ============================================================
+
+
+# ============================================================
+# START: search_department
+# ============================================================
+async def search_department(
+    page: Page,
+    filter_key: str,
+    *,
+    is_admin_units_for_case_creating: bool = False,
+    timeout_ms: int = 120_000,
+) -> dict[str, Any]:
+    """
+    Søger efter administrative enheder i Acadre.
+
+    Eksempel:
+        filter_key="*teknik*"
+
+    Søgeteksten sendes uændret efter fjernelse af indledende
+    og afsluttende mellemrum. Wildcards tilføjes ikke automatisk.
+
+    Genbruger den eksisterende Acadre-session.
+    Browserfanen navigeres ikke, og ingen sager ændres.
+
+    Returnerer:
+        {
+            "filter_key": "*teknik*",
+            "items": [
+                {
+                    "id": "203",
+                    "name": "Teknik og Klima",
+                },
+                ...
+            ],
+            "total_count": 8,
+            "found_items_more_than_limit": False,
+        }
+
+    Bemærk:
+        items indeholder de afdelinger, serveren returnerer.
+
+        Hvis found_items_more_than_limit er True, er resultatet
+        begrænset. Funktionen foretager ikke automatisk paginering,
+        da et pagineringsformat ikke er dokumenteret i requestet.
+
+        Funktionen vælger aldrig automatisk én afdeling.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    # --------------------------------------------------------
+    # VALIDÉR INPUT
+    # --------------------------------------------------------
+    if not isinstance(filter_key, str):
+        raise TypeError(
+            "filter_key skal være tekst."
+        )
+
+    normalized_filter_key = filter_key.strip()
+
+    if not normalized_filter_key:
+        raise ValueError(
+            "filter_key må ikke være tom."
+        )
+
+    if not isinstance(
+        is_admin_units_for_case_creating,
+        bool,
+    ):
+        raise TypeError(
+            "is_admin_units_for_case_creating "
+            "skal være True eller False."
+        )
+
+    if (
+        isinstance(timeout_ms, bool)
+        or not isinstance(timeout_ms, int)
+        or timeout_ms <= 0
+    ):
+        raise ValueError(
+            "timeout_ms skal være et positivt heltal."
+        )
+
+    if page.is_closed():
+        raise RuntimeError(
+            "Acadre-siden er lukket."
+        )
+
+    # --------------------------------------------------------
+    # BYG REQUEST
+    # --------------------------------------------------------
+    endpoint = (
+        f"{ACADRE_BASE_URL}"
+        "/Frontend/CM/AdminUnit/GetGridContextData"
+    )
+
+    payload = {
+        "Identifier": "LookupAdminUnits",
+        "SortingColumns": [
+            {
+                "ColumnKey": "admin-unit-name",
+                "Direction": "asc",
+            }
+        ],
+        "FilterKey": normalized_filter_key,
+
+        # Sendes som tekst, præcis som i det observerede request.
+        "IsAdminUnitsForCaseCreating": (
+            "true"
+            if is_admin_units_for_case_creating
+            else "false"
+        ),
+    }
+
+    logger.info(
+        "Søger efter Acadre-afdelinger med filter %r.",
+        normalized_filter_key,
+    )
+
+    response = await page.context.request.post(
+        endpoint,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json; charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Origin": ACADRE_BASE_URL,
+            "Referer": (
+                f"{ACADRE_BASE_URL}/Frontend/CM/"
+            ),
+        },
+        data=payload,
+        max_redirects=0,
+        timeout=timeout_ms,
+        fail_on_status_code=False,
+    )
+
+    try:
+        # ----------------------------------------------------
+        # VALIDÉR HTTP OG JSON
+        # ----------------------------------------------------
+        logger.info(
+            "HTTP-status fra afdelingssøgning: %s.",
+            response.status,
+        )
+
+        if not response.ok:
+            raise RuntimeError(
+                "Acadre-afdelingssøgningen fejlede.\n"
+                f"HTTP-status: {response.status}\n"
+                f"Søgefilter: {normalized_filter_key!r}"
+            )
+
+        try:
+            response_data = await response.json()
+        except ValueError as error:
+            raise RuntimeError(
+                "Acadre-afdelingssøgningen returnerede "
+                "ikke gyldig JSON."
+            ) from error
+
+        if not isinstance(response_data, dict):
+            raise RuntimeError(
+                "Forventede et JSON-objekt fra "
+                "Acadre-afdelingssøgningen."
+            )
+
+        raw_items = response_data.get("Items")
+
+        if not isinstance(raw_items, list):
+            raise RuntimeError(
+                "Acadre-svaret mangler en gyldig Items-liste."
+            )
+
+        total_count = response_data.get("TotalCount")
+
+        if (
+            isinstance(total_count, bool)
+            or not isinstance(total_count, int)
+            or total_count < 0
+        ):
+            raise RuntimeError(
+                "Acadre-svaret indeholder ikke "
+                "et gyldigt TotalCount."
+            )
+
+        found_items_more_than_limit = response_data.get(
+            "FoundItemsMoreThanLimit"
+        )
+
+        if not isinstance(
+            found_items_more_than_limit,
+            bool,
+        ):
+            raise RuntimeError(
+                "Acadre-svaret indeholder ikke et gyldigt "
+                "FoundItemsMoreThanLimit."
+            )
+
+        # ----------------------------------------------------
+        # UDLÆS AFDELINGS-ID OG NAVN
+        # ----------------------------------------------------
+        items: list[dict[str, str]] = []
+
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                raise RuntimeError(
+                    "Items indeholder et ugyldigt element."
+                )
+
+            raw_id = raw_item.get("Id")
+
+            if (
+                isinstance(raw_id, bool)
+                or not isinstance(raw_id, (str, int))
+            ):
+                raise RuntimeError(
+                    "En afdeling mangler et gyldigt Id."
+                )
+
+            department_id = str(raw_id).strip()
+
+            if (
+                not department_id.isdigit()
+                or int(department_id) <= 0
+            ):
+                raise RuntimeError(
+                    "Acadre returnerede et ugyldigt "
+                    f"afdelings-ID: {raw_id!r}."
+                )
+
+            values = raw_item.get("Values")
+
+            if not isinstance(values, list):
+                raise RuntimeError(
+                    "En afdeling mangler en gyldig "
+                    f"Values-liste. ID: {department_id}"
+                )
+
+            name_fields = [
+                value
+                for value in values
+                if (
+                    isinstance(value, dict)
+                    and value.get("Key") == "admin-unit-name"
+                )
+            ]
+
+            if len(name_fields) != 1:
+                raise RuntimeError(
+                    "Forventede præcis ét admin-unit-name "
+                    f"for afdeling {department_id}."
+                )
+
+            raw_name = name_fields[0].get("Value")
+
+            if (
+                not isinstance(raw_name, str)
+                or not raw_name.strip()
+            ):
+                raise RuntimeError(
+                    "Acadre returnerede et tomt eller "
+                    "ugyldigt afdelingsnavn for "
+                    f"ID {department_id}."
+                )
+
+            items.append(
+                {
+                    "id": department_id,
+                    "name": raw_name.strip(),
+                }
+            )
+
+        if found_items_more_than_limit:
+            logger.warning(
+                "Acadre har begrænset resultatet for %r. "
+                "Brug et mere præcist søgefilter.",
+                normalized_filter_key,
+            )
+
+        logger.info(
+            "Afdelingssøgningen er gennemført. "
+            "Serverens TotalCount: %s.",
+            total_count,
+        )
+
+        return {
+            "filter_key": normalized_filter_key,
+            "items": items,
+            "total_count": total_count,
+            "found_items_more_than_limit": (
+                found_items_more_than_limit
+            ),
+        }
+
+    finally:
+        await response.dispose()
+
+
+# ============================================================
+# SLUT: search_department
 # ============================================================
