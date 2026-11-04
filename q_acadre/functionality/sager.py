@@ -2678,6 +2678,7 @@ async def get_user_by_display_name(
 # ============================================================
 # START: search_department
 # ============================================================
+#man skal selv angive wildcard, functionen gør det IKKE selv ved inputtet.
 async def search_department(
     page: Page,
     filter_key: str,

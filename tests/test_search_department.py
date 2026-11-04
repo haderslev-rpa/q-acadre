@@ -33,7 +33,7 @@ from q_haderslev_vbo.playwright.browser_session import BrowserSession
 
 CREDENTIAL_NAME = "DIRXSDA"
 
-TEST_FILTER_KEY = "*Økonomi og Løn*"
+TEST_FILTER_KEY = "Økonomi og Løn"
 
 IS_ADMIN_UNITS_FOR_CASE_CREATING = False
 
