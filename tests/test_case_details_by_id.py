@@ -16,7 +16,7 @@ from q_haderslev_vbo.playwright.browser_session import BrowserSession
 
 
 # Ret kun denne værdi, når du vil teste et andet Acadre-caseId.
-CASE_ID = "761608"
+CASE_ID = "763145"
 
 # True kører uden synlig browser.
 # False åbner browseren under testen.

@@ -28,7 +28,7 @@ async def test_get_case_by_id() -> None:
         Funktionen returnerer ikke data.
         Resultatet fra get_case_by_id() udskrives i terminalen.
     """
-    case_id = 761319
+    case_id = 763145
 
     AutomationServer.from_environment()
 
